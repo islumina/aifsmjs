@@ -18,6 +18,33 @@ describe("after", () => {
     expect(fn).toHaveBeenCalledOnce();
   });
 
+  it("synchronous injected setTimeout: no TDZ throw and no leaked abort listener", () => {
+    // A custom `st` that fires inline must not hit the temporal-dead-zone on
+    // `cancel`; and because the timer already fired, no abort listener should
+    // be attached (it could never be removed via the fire path).
+    const ac = new AbortController();
+    const addSpy = vi.spyOn(ac.signal, "addEventListener");
+    let ran = false;
+    expect(() =>
+      after(
+        0,
+        () => {
+          ran = true;
+        },
+        {
+          signal: ac.signal,
+          setTimeout: (fn) => {
+            fn();
+            return 0;
+          },
+          clearTimeout: () => {},
+        },
+      ),
+    ).not.toThrow();
+    expect(ran).toBe(true);
+    expect(addSpy).not.toHaveBeenCalled();
+  });
+
   it("cancel() before firing prevents the callback", () => {
     const fn = vi.fn();
     const h = after(1000, fn);
@@ -79,6 +106,45 @@ describe("after", () => {
     const call = addSpy.mock.calls[0];
     expect(call?.[0]).toBe("abort");
     expect(call?.[2]).toEqual({ once: true });
+  });
+
+  it("abort listener is detached via removeEventListener after timer fires (memory-leak regression)", () => {
+    // Regression: { once: true } only removes the listener when the signal
+    // aborts — not when the timer fires normally. Scheduling many timers on a
+    // shared, long-lived signal therefore accumulates dead "abort" listeners.
+    // The fix explicitly calls removeEventListener inside the fire callback.
+    const ac = new AbortController();
+    const removeSpy = vi.spyOn(ac.signal, "removeEventListener");
+    const fn = vi.fn();
+
+    after(100, fn, { signal: ac.signal });
+
+    // Timer fires — abort listener must be detached immediately.
+    vi.advanceTimersByTime(100);
+    expect(fn).toHaveBeenCalledOnce();
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+
+    // Aborting the signal afterwards must be a harmless no-op.
+    expect(() => ac.abort()).not.toThrow();
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("abort listener is detached via removeEventListener after cancel() (memory-leak regression)", () => {
+    // Regression: cancel() cleared the timer but did not detach the abort
+    // listener — dead closures accumulated on a reused signal.
+    const ac = new AbortController();
+    const removeSpy = vi.spyOn(ac.signal, "removeEventListener");
+    const fn = vi.fn();
+
+    const h = after(100, fn, { signal: ac.signal });
+
+    // Cancel before fire — abort listener must be detached.
+    h.cancel();
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+
+    // Timer advance must not invoke fn.
+    vi.advanceTimersByTime(200);
+    expect(fn).not.toHaveBeenCalled();
   });
 });
 
@@ -146,5 +212,41 @@ describe("createScheduler", () => {
     s.after(0, inner);
     expect(fakeSet).toHaveBeenCalled();
     expect(inner).toHaveBeenCalled();
+  });
+
+  it("createScheduler: abort listener detached via removeEventListener after timer fires (memory-leak regression)", () => {
+    // Mirror of the after() regression test: when a signal is supplied to
+    // createScheduler().after(), firing the timer must explicitly detach the
+    // abort listener so a long-lived shared signal does not accumulate dead
+    // closures.
+    const ac = new AbortController();
+    const removeSpy = vi.spyOn(ac.signal, "removeEventListener");
+    const fn = vi.fn();
+
+    const s = createScheduler();
+    s.after(100, fn, { signal: ac.signal });
+
+    vi.advanceTimersByTime(100);
+    expect(fn).toHaveBeenCalledOnce();
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+
+    // Aborting afterwards must be a no-op.
+    expect(() => ac.abort()).not.toThrow();
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("createScheduler: abort listener detached via removeEventListener after cancel() (memory-leak regression)", () => {
+    const ac = new AbortController();
+    const removeSpy = vi.spyOn(ac.signal, "removeEventListener");
+    const fn = vi.fn();
+
+    const s = createScheduler();
+    const h = s.after(100, fn, { signal: ac.signal });
+
+    h.cancel();
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+
+    vi.advanceTimersByTime(200);
+    expect(fn).not.toHaveBeenCalled();
   });
 });

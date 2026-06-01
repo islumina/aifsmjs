@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Memory: `after()` and `createScheduler().after()` accumulated dead abort
+  listeners on a reused `AbortSignal`.** `{ once: true }` only removes the
+  listener when the signal fires — not when the timer fires normally or
+  `cancel()` is called. Scheduling many timers on one long-lived signal
+  therefore accumulated dead `"abort"` closures. The fix explicitly calls
+  `signal.removeEventListener("abort", cancel)` inside the fire callback (so
+  a fired timer detaches immediately) and at the end of `cancel()` (so a
+  cancelled timer also detaches). Same class of leak as the [0.1.2] and
+  [0.3.1] abort-listener fixes; the timer subpath was the remaining gap.
+  Four regression tests added to `test/timer/scheduler.test.ts` covering
+  both `after()` and `createScheduler().after()`, fire and cancel paths.
+  (`src/timer/scheduler.ts`)
+
+### Changed
+
+- **`fast-check` peer dependency range extended to `^3.20.0 || ^4.0.0`.**
+  The ai\*js family standard is fast-check v4.8; consumers who have already
+  upgraded to v4 no longer need to suppress a peer warning. The devDependency
+  is pinned to `^4.8.0` so CI runs against v4. Consumers who remain on v3
+  are fully unaffected — the `||` range keeps v3 satisfied. The `aifsmjs/pbt`
+  subpath is the only entry point that imports fast-check; the core and all
+  other subpaths are tree-shake-free of it.
+
 ## [0.4.1] — 2026-05-29
 
 ### Changed

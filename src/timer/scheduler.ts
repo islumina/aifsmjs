@@ -38,8 +38,13 @@ function resolveTimers(opts: AfterOptions | undefined): {
  * `cancel()` clears the pending timer. Optional `signal` aborts the timer when
  * triggered. Aborting after the callback fires is a no-op.
  *
- * Per Node guidance, the abort listener is registered with `{ once: true }` to
- * avoid leaking listeners when the same signal is reused across many timers.
+ * The abort listener is registered with `{ once: true }` as a baseline, but
+ * `{ once: true }` alone does NOT prevent listener accumulation when the same
+ * signal is reused across many timers: it only removes the listener when the
+ * signal aborts, not when the timer fires normally or `cancel()` is called.
+ * We therefore explicitly call `signal.removeEventListener("abort", cancel)`
+ * inside the fire callback and at the end of `cancel()` so that a shared,
+ * long-lived signal never accumulates dead listeners across timer reuse.
  */
 export function after(ms: number, fn: () => void, opts?: AfterOptions): AfterHandle {
   if (opts?.signal?.aborted) return NOOP;
@@ -47,21 +52,37 @@ export function after(ms: number, fn: () => void, opts?: AfterOptions): AfterHan
   const { st, ct } = resolveTimers(opts);
   let fired = false;
   let cancelled = false;
-
-  const handle = st(() => {
-    fired = true;
-    /* v8 ignore next — defensive race guard: cancel() sets cancelled=true and clears the timer, but if a custom setTimeout fires after clear, this short-circuits fn(). */
-    if (cancelled) return;
-    fn();
-  }, ms);
+  // `cancel` and the timer handle reference each other. A const cell holds the
+  // handle so `cancel` can be defined BEFORE `st(...)` runs (letting a custom
+  // `st` that fires its callback synchronously reference `cancel` without
+  // hitting the temporal-dead-zone) while still being able to clear the handle
+  // assigned afterwards. A synchronous fire sets `fired=true`, so cancel() never
+  // reads the still-unset handle in that path.
+  const timer: { handle?: ReturnType<typeof st> } = {};
 
   const cancel = () => {
     if (fired || cancelled) return;
     cancelled = true;
-    ct(handle);
+    if (timer.handle !== undefined) ct(timer.handle);
+    // Detach the abort listener so a reused signal does not accumulate dead
+    // closures after this timer is cancelled.
+    if (opts?.signal) opts.signal.removeEventListener("abort", cancel);
   };
 
-  if (opts?.signal) {
+  timer.handle = st(() => {
+    fired = true;
+    /* v8 ignore next — defensive race guard: cancel() sets cancelled=true and clears the timer, but if a custom setTimeout fires after clear, this short-circuits fn(). */
+    if (cancelled) return;
+    // Detach the abort listener now that the timer has fired — the listener
+    // will never be invoked and must not accumulate on a reused signal.
+    if (opts?.signal) opts.signal.removeEventListener("abort", cancel);
+    fn();
+  }, ms);
+
+  // Attach only if the timer has not already fired synchronously (a custom `st`
+  // may fire inline); otherwise the listener would be registered AFTER the fire
+  // path's removal ran and would then leak until the signal aborts.
+  if (opts?.signal && !fired) {
     opts.signal.addEventListener("abort", cancel, { once: true });
   }
 
