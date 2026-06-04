@@ -207,7 +207,7 @@ function step<C, E, S>(
 ): { snapshot: Snapshot<C, S>; effects: readonly Effect[] };
 ```
 
-**Pure function**. The invariant keeper for the whole library. It never dispatches effects, never mutates the snapshot, and never throws — a failing guard or unmapped event simply returns the original snapshot.
+**Pure function**. The invariant keeper for the whole library. It never dispatches effects and never mutates the snapshot. A failing guard or unmapped event simply returns the original snapshot unchanged. It does throw on misuse (`UnknownGuardError`, `UnknownActionError`, `AsyncGuardError`) so guard/action wiring errors surface at development time rather than silently passing.
 
 ### `assign(updater)`
 
@@ -266,7 +266,7 @@ const runtime = createRuntime(def, impl, {
 });
 ```
 
-Koa-style `(ctx, next) => void` pipeline. `ctx` is `{ prev, next, event, effects }`, all `structuredClone`d and frozen. **Cannot cancel a transition** — `next()` must be called; the return value carries no meaning.
+Koa-style `(ctx, next) => void` pipeline. `ctx` is `{ prev, next, event, effects, changed }`, all deep-frozen. **Cannot cancel a transition** — `next()` must be called; the return value carries no meaning.
 
 ### `aifsmjs/replay` — Pure event log replay
 
@@ -285,14 +285,25 @@ Never dispatches effects. For PBT, time-travel debugging, and incident reproduct
 
 ```typescript
 import fc from "fast-check";
-import { commandsFromMachine, properties } from "aifsmjs/pbt";
+import { createRuntime } from "aifsmjs";
+import { commandsFromMachine, initialModel, properties } from "aifsmjs/pbt";
 
+// Use one of the six built-in generic properties, or assertAll for all at once:
+properties.replayEqualsFold(def, impl, {
+  NEXT: fc.constant({ type: "NEXT" as const }),
+});
+
+// Or build a custom property using commandsFromMachine:
 fc.assert(
   fc.property(
     commandsFromMachine(def, impl, {
       NEXT: fc.constant({ type: "NEXT" as const }),
     }),
-    (cmds) => properties.runDeterministic(def, impl, cmds),
+    (cmds) => {
+      const real = createRuntime(def, impl, { dispatchEffects: false });
+      fc.modelRun(() => ({ model: initialModel(def), real }), cmds);
+      return true;
+    },
   ),
 );
 ```

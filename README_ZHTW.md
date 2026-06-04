@@ -206,7 +206,7 @@ function step<C, E, S>(
 ): { snapshot: Snapshot<C, S>; effects: readonly Effect[] };
 ```
 
-**Pure function**。整個 library 的 invariant 守護者。不會 dispatch effects、不會 mutate snapshot、不會丟錯——guard 沒過或 event 沒對應 transition 就回原 snapshot。
+**Pure function**。整個 library 的 invariant 守護者。不會 dispatch effects、不會 mutate snapshot。Guard 沒過或 event 沒對應 transition 就回原 snapshot（不改變）。誤用（`UnknownGuardError`、`UnknownActionError`、`AsyncGuardError`）才會丟錯，讓配接錯誤在開發期間立即浮現、不被靜默略過。
 
 ### `assign(updater)`
 
@@ -265,7 +265,7 @@ const runtime = createRuntime(def, impl, {
 });
 ```
 
-Koa-style `(ctx, next) => void` pipeline。`ctx` 是 `{ prev, next, event, effects }`，全部 `structuredClone + freeze`。**不能中止 transition**——`next()` 必呼叫，回傳值無語意。
+Koa-style `(ctx, next) => void` pipeline。`ctx` 是 `{ prev, next, event, effects, changed }`，全部 deep-frozen。**不能中止 transition**——`next()` 必呼叫，回傳值無語意。
 
 ### `aifsmjs/replay` — Pure event log replay
 
@@ -284,14 +284,25 @@ const finalSnap = replay(initialSnapshot, eventLog, def, impl);
 
 ```typescript
 import fc from "fast-check";
-import { commandsFromMachine, properties } from "aifsmjs/pbt";
+import { createRuntime } from "aifsmjs";
+import { commandsFromMachine, initialModel, properties } from "aifsmjs/pbt";
 
+// 用任一內建 generic property，或 assertAll 一次跑全部：
+properties.replayEqualsFold(def, impl, {
+  NEXT: fc.constant({ type: "NEXT" as const }),
+});
+
+// 或用 commandsFromMachine 自訂 property：
 fc.assert(
   fc.property(
     commandsFromMachine(def, impl, {
       NEXT: fc.constant({ type: "NEXT" as const }),
     }),
-    (cmds) => properties.runDeterministic(def, impl, cmds),
+    (cmds) => {
+      const real = createRuntime(def, impl, { dispatchEffects: false });
+      fc.modelRun(() => ({ model: initialModel(def), real }), cmds);
+      return true;
+    },
   ),
 );
 ```
@@ -398,7 +409,7 @@ aifsmjs 在幾個常見議題上做了刻意取捨，跟主流 FSM library 寫�
 
 - **`send()` 是同步、回傳 `Snapshot` 而非 `Promise<Snapshot>`**。Pure `step()` 設計上就是 sync，`replay(initial, log)` 與 PBT shrinking 才能單純。Effect handler 仍可 async；runtime 觸發後忽略結果，async rejection 走 `'error'` event channel。要 await effect 完成的人可自己包一層 `Promise.all`。
 - **Guards / reducers 只能 sync**。非確定性 guard 會破壞 PBT determinism property (#1)。把 async 改寫成 event：先送 `FETCH_REQUEST`，handler 完成後送 `FETCH_DONE`，payload 帶結果。
-- **Effects 是描述子，不是 inline callback**。Action 透過 `enqueue.effect({ type, payload })` 排隊；runtime 收集後 dispatcher 才執行 user handler。好處：machine definition 可序列化（沒 inline fn 時 JSON round-trip）、`replay()` 可把 event log 摺成同樣 snapshot、`inspect/persist` middleware 抓得到 effects 做 audit log。
+- **Effects 是描述子，不是 inline callback**。Action 透過 `enqueue.effect(type, payload?)` 排隊；runtime 收集後 dispatcher 才執行 user handler。好處：machine definition 可序列化（沒 inline fn 時 JSON round-trip）、`replay()` 可把 event log 摺成同樣 snapshot、`inspect/persist` middleware 抓得到 effects 做 audit log。
 - **兩種 factory 並存**。`setup<Ctx, Evt>().defineMachine(...)` 是型別友善版（States 從 `keyof states` 推導）。`createMachine(def, impl, opts?)` 是來自 ai*js 生態 spec 的 single-factory 捷徑。顯式 `defineMachine<Ctx, Evt, States>(def)` 仍保留作完全顯式控制。看 call site 哪個讀起來順手就用哪個。
 - **`subscribe(listener)` 與 `on(type, fn, { signal, once })` 並存**。Typed `on()` 對齊平台 `EventTarget` 語意（signal + once），emit `'transition'`、`'error'`、`'dispose'`。原本的 `subscribe()` 保留 React `useSyncExternalStore` shape，可直接傳。兩者不互斥。
 
