@@ -48,6 +48,18 @@ export type TransitionDef<Ctx, Evt, States extends string> = Readonly<{
 }>;
 
 /**
+ * A single transition as written in a `StateDef.on` map. Either the full
+ * {@link TransitionDef} object form, or the string shorthand `"targetState"`
+ * (à la XState) which the resolver normalizes to `{ target: "targetState" }`
+ * before processing. The shorthand carries no guard or actions.
+ *
+ * @since 0.5.3
+ */
+export type TransitionConfig<Ctx, Evt, States extends string> =
+  | States
+  | TransitionDef<Ctx, Evt, States>;
+
+/**
  * @experimental v0.3.0
  *
  * A nested machine definition attachable to StateDef.sub. The type parameters
@@ -67,7 +79,10 @@ export type SubMachineDef<
 
 export type StateDef<Ctx, Evt, States extends string> = Readonly<{
   on?: Readonly<
-    Record<string, TransitionDef<Ctx, Evt, States> | readonly TransitionDef<Ctx, Evt, States>[]>
+    Record<
+      string,
+      TransitionConfig<Ctx, Evt, States> | readonly TransitionConfig<Ctx, Evt, States>[]
+    >
   >;
   entry?: readonly ActionRef<Ctx, Evt>[];
   exit?: readonly ActionRef<Ctx, Evt>[];
@@ -103,6 +118,26 @@ export type MachineDef<Ctx, Evt extends { type: string }, States extends string>
   context: Ctx;
   states: Readonly<Record<States, StateDef<Ctx, Evt, States>>>;
 }>;
+
+/**
+ * Input shape accepted by `defineMachine` / `setup().defineMachine`. Identical
+ * to {@link MachineDef} except `context` is **optional** — when omitted it
+ * defaults to `{}` (paired with the `Ctx = Record<string, never>` default type
+ * parameter). The returned value is always a fully-normalized
+ * {@link MachineDef} with `context` present, so downstream consumers are
+ * unaffected.
+ *
+ * @since 0.5.3
+ */
+export type MachineConfig<Ctx, Evt extends { type: string }, States extends string> = Readonly<{
+  id: string;
+  initial: States;
+  states: Readonly<Record<States, StateDef<Ctx, Evt, States>>>;
+}> &
+  // `context` may be omitted only when `Ctx` has no required properties (e.g. the
+  // default `Record<string, never>`). If `Ctx` has required fields it must be
+  // supplied, so omitting it can't silently default to `{}` and crash at runtime.
+  (Record<string, never> extends Ctx ? { readonly context?: Ctx } : { readonly context: Ctx });
 
 export type Snapshot<Ctx, States extends string> = Readonly<{
   value: States;

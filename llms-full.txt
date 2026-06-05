@@ -177,13 +177,34 @@ aifsmjs follows the XState v5 two-phase pattern (`setup().createMachine()`): the
 
 ```typescript
 function defineMachine<
-  Ctx,
-  Evt extends { type: string },
-  States extends string,
->(def: MachineDef<Ctx, Evt, States>): MachineDef<Ctx, Evt, States>;
+  Ctx = Record<string, never>,
+  Evt extends { type: string } = { type: string },
+  States extends string = string,
+>(def: MachineConfig<Ctx, Evt, States>): MachineDef<Ctx, Evt, States>;
 ```
 
-Pure data builder. Freezes the whole definition and validates that `initial` exists in the `states` map.
+Pure data builder. Validates that `initial` exists in the `states` map and returns the (normalized) definition.
+
+`context` is **optional** — omit it for stateless machines and it defaults to `{}` (the type parameter defaults to `Record<string, never>`). Existing definitions that pass `context` are unaffected.
+
+```typescript
+// No context needed — defaults to {}
+const toggle = defineMachine({
+  id: "toggle",
+  initial: "off",
+  states: {
+    off: { on: { TOGGLE: "on" } },   // string shorthand, see below
+    on:  { on: { TOGGLE: "off" } },
+  },
+});
+```
+
+**String-shorthand transitions.** A transition value may be either the full object form or a bare target-state string (à la XState). The string is normalized to `{ target }` before processing — it carries no guard or actions:
+
+```typescript
+on: { NEXT: "green" }                 // shorthand for { target: "green" }
+on: { NEXT: [{ target: "a", guard: "g" }, "b"] }  // mixes with the object form
+```
 
 ### `createRuntime(def, impl, opts?)`
 
@@ -430,6 +451,8 @@ aifsmjs ships a few opinionated calls that look different from the typical FSM l
 - **Guards and reducers are sync.** A non-deterministic guard would break the PBT determinism property (#1 in the generic suite). Move async predicates into events: send `FETCH_REQUEST`, then later `FETCH_DONE` with the resolved value as payload.
 - **Effects are descriptors, not inline callbacks.** Actions enqueue `{ type, payload }` via `enqueue.effect(...)`; the runtime collects them and the dispatcher invokes user handlers. This keeps machine definitions serializable (JSON round-trippable when no inline functions are used), enables `replay()` to fold an event log into the same snapshot, and lets `inspect/persist` middleware capture effects for audit logs.
 - **Two factory paths coexist.** `setup<Ctx, Evt>().defineMachine(...)` is the type-friendly form (States inferred from `keyof states`). `createMachine(def, impl, opts?)` is the spec-style single-factory shortcut from the ai*js ecosystem review. Plain `defineMachine<Ctx, Evt, States>(def)` remains for explicit generic control. Pick whichever reads best at the call site.
+- **Transitions accept a string shorthand.** `on: { EVENT: "targetState" }` is sugar for `on: { EVENT: { target: "targetState" } }`, normalized in the resolver before any guard/action processing. The shorthand has no guard or actions; reach for the object form when you need them. It composes inside the array form too, so guard-fallthrough lists can mix `{ target, guard }` objects with bare target strings. The full object form is unchanged — this is purely additive.
+- **`context` is optional.** Omit it for stateless machines and it defaults to `{}` (`Ctx` defaults to `Record<string, never>`). Definitions that already pass `context` keep their inferred type and behave identically.
 - **`subscribe(listener)` and `on(type, fn, { signal, once })` both exist.** The typed `on()` matches the platform `EventTarget` semantics (signal + once) and emits `'transition'`, `'error'`, `'dispose'`. The older `subscribe()` keeps the React `useSyncExternalStore` shape — pass it directly. They are not exclusive.
 
 ---
@@ -555,6 +578,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.5.3] - 2026-06-05
+
+### Added
+
+- **String-shorthand transitions and optional `context` (both additive, non-breaking).** Transitions now accept a bare target string — `on: { EVENT: "target" }` is sugar for `{ target: "target" }`, normalized in the resolver and composable inside guard-fallthrough arrays; and `context` is now optional in `defineMachine` / `setup().defineMachine`, defaulting to `{}` (`Ctx` defaults to `Record<string, never>`). Existing object-form transitions and explicit-`context` definitions are unaffected. (`src/fsm/types.ts`, `src/fsm/resolver.ts`, `src/fsm/definition.ts`, `src/fsm/lifecycle.ts`, `src/fsm/runtime.ts`)
 
 ## [0.5.2] - 2026-06-05
 

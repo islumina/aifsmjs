@@ -1,8 +1,10 @@
 import { isAsyncGuardFn } from "./evaluator.js";
+import { normalizeTransitions } from "./resolver.js";
 import { createRuntime } from "./runtime.js";
 import { freezeSnapshot } from "./snapshot.js";
 import type {
   Implementations,
+  MachineConfig,
   MachineDef,
   Runtime,
   RuntimeOptions,
@@ -58,7 +60,7 @@ function validateDefinition<Ctx, Evt extends { type: string }, States extends st
     }
     if (!stateDef.on) continue;
     for (const [evtType, entry] of Object.entries(stateDef.on)) {
-      const transitions = Array.isArray(entry) ? entry : [entry];
+      const transitions = normalizeTransitions(entry);
       for (const t of transitions) {
         if (t.target !== undefined && !stateKeys.includes(t.target)) {
           throw new InvalidDefinitionError(
@@ -76,8 +78,9 @@ function validateDefinition<Ctx, Evt extends { type: string }, States extends st
 }
 
 /**
- * Validate a machine definition shape and return it. Same reference is
- * returned; no cloning happens. Validation is intentionally shallow.
+ * Validate a machine definition shape and return it. When `context` is
+ * provided the same reference is returned; when it is omitted a shallow copy
+ * with `context: {}` is returned. Validation is intentionally shallow.
  *
  * Two call forms:
  *
@@ -89,11 +92,18 @@ function validateDefinition<Ctx, Evt extends { type: string }, States extends st
  *     Curried form. Lets `States` be inferred from `keyof states`, so you
  *     can omit it. Recommended for typical usage.
  */
-export function defineMachine<Ctx, Evt extends { type: string }, States extends string>(
-  def: MachineDef<Ctx, Evt, States>,
-): MachineDef<Ctx, Evt, States> {
-  validateDefinition(def);
-  return def;
+export function defineMachine<
+  Ctx = Record<string, never>,
+  Evt extends { type: string } = { type: string },
+  States extends string = string,
+>(def: MachineConfig<Ctx, Evt, States>): MachineDef<Ctx, Evt, States> {
+  const normalized = (!("context" in def) ? { ...def, context: {} as Ctx } : def) as MachineDef<
+    Ctx,
+    Evt,
+    States
+  >;
+  validateDefinition(normalized);
+  return normalized;
 }
 
 /**
@@ -108,22 +118,33 @@ export function defineMachine<Ctx, Evt extends { type: string }, States extends 
  *     states: { a: {...}, b: {...} },  // States inferred as "a" | "b"
  *   });
  */
-export function setup<Ctx, Evt extends { type: string }>(): {
-  defineMachine: <const States extends string>(def: {
-    readonly id: string;
-    readonly initial: NoInfer<States>;
-    readonly context: Ctx;
-    readonly states: Readonly<Record<States, StateDef<Ctx, Evt, States>>>;
-  }) => MachineDef<Ctx, Evt, States>;
+export function setup<
+  Ctx = Record<string, never>,
+  Evt extends { type: string } = { type: string },
+>(): {
+  defineMachine: <const States extends string>(
+    def: Readonly<{
+      id: string;
+      initial: NoInfer<States>;
+      states: Readonly<Record<States, StateDef<Ctx, Evt, States>>>;
+    }> &
+      (Record<string, never> extends Ctx ? { readonly context?: Ctx } : { readonly context: Ctx }),
+  ) => MachineDef<Ctx, Evt, States>;
 } {
   return {
-    defineMachine: <const States extends string>(def: {
-      readonly id: string;
-      readonly initial: NoInfer<States>;
-      readonly context: Ctx;
-      readonly states: Readonly<Record<States, StateDef<Ctx, Evt, States>>>;
-    }) => {
-      const cast = def as unknown as MachineDef<Ctx, Evt, States>;
+    defineMachine: <const States extends string>(
+      def: Readonly<{
+        id: string;
+        initial: NoInfer<States>;
+        states: Readonly<Record<States, StateDef<Ctx, Evt, States>>>;
+      }> &
+        (Record<string, never> extends Ctx
+          ? { readonly context?: Ctx }
+          : { readonly context: Ctx }),
+    ) => {
+      const cast = (!("context" in def)
+        ? { ...def, context: {} as Ctx }
+        : def) as unknown as MachineDef<Ctx, Evt, States>;
       validateDefinition(cast);
       return cast;
     },

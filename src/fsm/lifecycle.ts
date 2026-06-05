@@ -1,5 +1,6 @@
 import { createEnqueuer } from "../effects/enqueuer.js";
 import { evalGuard } from "./evaluator.js";
+import { normalizeTransitions } from "./resolver.js";
 import { freezeSnapshot } from "./snapshot.js";
 import type {
   Action,
@@ -94,12 +95,7 @@ export function step<Ctx, Evt extends { type: string }, States extends string>(
     return Object.freeze({ snapshot, effects: [] as readonly Effect[], changed: false });
   }
 
-  const candidates = state.on?.[event.type];
-  const candidateList: readonly TransitionDef<Ctx, Evt, States>[] = candidates
-    ? Array.isArray(candidates)
-      ? candidates
-      : [candidates as TransitionDef<Ctx, Evt, States>]
-    : [];
+  const candidateList = normalizeTransitions(state.on?.[event.type]);
 
   const chosen = pickTransition(candidateList, snapshot.context, event, impl, snapshot.value);
   if (!chosen) {

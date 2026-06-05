@@ -163,13 +163,34 @@ aifsmjs 走 XState v5 `setup().createMachine()` 雙階段路線：definition 用
 
 ```typescript
 function defineMachine<
-  Ctx,
-  Evt extends { type: string },
-  States extends string,
->(def: MachineDef<Ctx, Evt, States>): MachineDef<Ctx, Evt, States>;
+  Ctx = Record<string, never>,
+  Evt extends { type: string } = { type: string },
+  States extends string = string,
+>(def: MachineConfig<Ctx, Evt, States>): MachineDef<Ctx, Evt, States>;
 ```
 
-純資料 builder。會 freeze 整個 def 並驗證 `initial` 在 `states` 集合內。
+純資料 builder。會驗證 `initial` 在 `states` 集合內並回傳（正規化後的）def。
+
+`context` 為**選填**——無狀態機器可省略，會預設為 `{}`（型別參數預設為 `Record<string, never>`）。原本就有傳 `context` 的定義完全不受影響。
+
+```typescript
+// 不需要 context——預設為 {}
+const toggle = defineMachine({
+  id: "toggle",
+  initial: "off",
+  states: {
+    off: { on: { TOGGLE: "on" } },   // 字串簡寫，見下
+    on:  { on: { TOGGLE: "off" } },
+  },
+});
+```
+
+**字串簡寫 transition。** transition 的值可以是完整物件形式，也可以是單純的目標 state 字串（仿 XState）。字串會在進入任何 guard/action 處理前被正規化成 `{ target }`——它不帶 guard 或 actions：
+
+```typescript
+on: { NEXT: "green" }                 // 等同 { target: "green" }
+on: { NEXT: [{ target: "a", guard: "g" }, "b"] }  // 可與物件形式混用
+```
 
 ### `createRuntime(def, impl, opts?)`
 
@@ -411,6 +432,8 @@ aifsmjs 在幾個常見議題上做了刻意取捨，跟主流 FSM library 寫�
 - **Guards / reducers 只能 sync**。非確定性 guard 會破壞 PBT determinism property (#1)。把 async 改寫成 event：先送 `FETCH_REQUEST`，handler 完成後送 `FETCH_DONE`，payload 帶結果。
 - **Effects 是描述子，不是 inline callback**。Action 透過 `enqueue.effect(type, payload?)` 排隊；runtime 收集後 dispatcher 才執行 user handler。好處：machine definition 可序列化（沒 inline fn 時 JSON round-trip）、`replay()` 可把 event log 摺成同樣 snapshot、`inspect/persist` middleware 抓得到 effects 做 audit log。
 - **兩種 factory 並存**。`setup<Ctx, Evt>().defineMachine(...)` 是型別友善版（States 從 `keyof states` 推導）。`createMachine(def, impl, opts?)` 是來自 ai*js 生態 spec 的 single-factory 捷徑。顯式 `defineMachine<Ctx, Evt, States>(def)` 仍保留作完全顯式控制。看 call site 哪個讀起來順手就用哪個。
+- **transition 支援字串簡寫**。`on: { EVENT: "targetState" }` 是 `on: { EVENT: { target: "targetState" } }` 的語法糖，在 resolver 於任何 guard/action 處理前正規化。簡寫不帶 guard 或 actions；需要時改用物件形式。它也能在陣列形式中混用，所以 guard-fallthrough 清單可以同時放 `{ target, guard }` 物件與單純的目標字串。完整物件形式不變——此為純加法。
+- **`context` 為選填**。無狀態機器可省略，預設為 `{}`（`Ctx` 預設為 `Record<string, never>`）。原本就傳 `context` 的定義型別推導與行為完全相同。
 - **`subscribe(listener)` 與 `on(type, fn, { signal, once })` 並存**。Typed `on()` 對齊平台 `EventTarget` 語意（signal + once），emit `'transition'`、`'error'`、`'dispose'`。原本的 `subscribe()` 保留 React `useSyncExternalStore` shape，可直接傳。兩者不互斥。
 
 ---

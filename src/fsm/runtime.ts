@@ -1,6 +1,7 @@
 import { initialSnapshot } from "./definition.js";
 import { evalGuard } from "./evaluator.js";
 import { step } from "./lifecycle.js";
+import { normalizeTransitions } from "./resolver.js";
 import { deepFreeze } from "./snapshot.js";
 import {
   type Effect,
@@ -14,7 +15,6 @@ import {
   type RuntimeOptions,
   type RuntimeTransitionEvent,
   type Snapshot,
-  type TransitionDef,
 } from "./types.js";
 
 export class RuntimeDisposedError extends Error {
@@ -180,11 +180,8 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
   function findChosenIsExternal(value: States, event: Evt, context: Ctx): boolean {
     const state = def.states[value];
     if (!state?.on) return false;
-    const candidates = state.on[event.type];
-    if (!candidates) return false;
-    const list: readonly TransitionDef<Ctx, Evt, States>[] = Array.isArray(candidates)
-      ? candidates
-      : [candidates as TransitionDef<Ctx, Evt, States>];
+    const list = normalizeTransitions(state.on[event.type]);
+    if (list.length === 0) return false;
     for (const t of list) {
       if (!t.guard || evalGuard(t.guard, context, event, impl, value)) {
         return t.target !== undefined;
@@ -302,11 +299,8 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     const state = def.states[snapshot.value];
     /* v8 ignore next — defensive: snapshot.value always corresponds to a declared state. */
     if (!state) return false;
-    const candidates = state.on?.[event.type];
-    if (!candidates) return false;
-    const list: readonly TransitionDef<Ctx, Evt, States>[] = Array.isArray(candidates)
-      ? candidates
-      : [candidates as TransitionDef<Ctx, Evt, States>];
+    const list = normalizeTransitions(state.on?.[event.type]);
+    if (list.length === 0) return false;
     for (const t of list) {
       if (!t.guard) return true;
       if (evalGuard(t.guard, snapshot.context, event, impl, snapshot.value)) return true;

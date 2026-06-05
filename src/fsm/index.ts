@@ -21,6 +21,7 @@ export type {
   StateDef,
   StepResult,
   SubMachineDef,
+  TransitionConfig,
   TransitionDef,
 } from "./types.js";
 
@@ -43,5 +44,5 @@ export {
   resolveGuard,
   UnknownGuardError,
 } from "./evaluator.js";
-export { resolveTransitions } from "./resolver.js";
+export { normalizeTransition, normalizeTransitions, resolveTransitions } from "./resolver.js";
 export { createSnapshot, deepFreeze, freezeSnapshot } from "./snapshot.js";

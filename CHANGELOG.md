@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-06-05
+
+### Added
+
+- **String-shorthand transitions and optional `context` (both additive, non-breaking).** Transitions now accept a bare target string — `on: { EVENT: "target" }` is sugar for `{ target: "target" }`, normalized in the resolver and composable inside guard-fallthrough arrays; and `context` is now optional in `defineMachine` / `setup().defineMachine`, defaulting to `{}` (`Ctx` defaults to `Record<string, never>`). Existing object-form transitions and explicit-`context` definitions are unaffected. (`src/fsm/types.ts`, `src/fsm/resolver.ts`, `src/fsm/definition.ts`, `src/fsm/lifecycle.ts`, `src/fsm/runtime.ts`)
+
 ## [0.5.2] - 2026-06-05
 
 ### Docs
