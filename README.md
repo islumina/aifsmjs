@@ -1,14 +1,14 @@
 # aifsmjs
 
 [![npm version](https://img.shields.io/npm/v/aifsmjs.svg)](https://www.npmjs.com/package/aifsmjs)
-[![CI](https://github.com/yshengliao/aifsmjs/actions/workflows/ci.yml/badge.svg)](https://github.com/yshengliao/aifsmjs/actions/workflows/ci.yml)
+[![CI](https://github.com/islumina/aifsmjs/actions/workflows/ci.yml/badge.svg)](https://github.com/islumina/aifsmjs/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
 [![AI Generated](https://img.shields.io/badge/AI_Generated-Claude_Code_Opus_4.7_Max-blueviolet.svg)](https://www.anthropic.com/claude-code)
 [![繁體中文](https://img.shields.io/badge/lang-繁體中文-red.svg)](README_ZHTW.md)
 
 > A small, strict FSM library for any TypeScript/JS app that needs deterministic, replayable state transitions. Lifecycle is a pure `step()` function. Chain-of-Responsibility intuition is reserved for cross-cutting concerns (observe / persist / replay), never for the transition core.
 
-Part of the [ai\*js micro-runtime ecosystem](https://github.com/yshengliao) — see also [aibridgejs](https://github.com/yshengliao/aibridgejs) (cross-context RPC) and [aiecsjs](https://github.com/yshengliao/aiecsjs) (ECS).
+Part of the [ai\*js micro-runtime ecosystem](https://github.com/islumina) — see also [aibridgejs](https://github.com/islumina/aibridgejs) (cross-context RPC) and [aiecsjs](https://github.com/islumina/aiecsjs) (ECS).
 
 **Primary audience**: developers building stateful flows — multi-step forms, checkout funnels, auth flows, tutorial sequences, document-status workflows, scene flow in interactive apps, and the same patterns in browser-based games (PixiJS / Svelte 5 / plain Canvas / WebGL). The core is **environment-neutral** (pure function + adapter boundary): browser, Node, Bun, Deno, Flutter WebView, and Web Workers all work. The Roadmap section keeps gaming-specific niceties (tick hook, ECS bridge) as opt-in subpaths, not core surface.
 
