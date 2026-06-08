@@ -1,6 +1,6 @@
 {
   "name": "aifsmjs",
-  "version": "0.5.3",
+  "version": "0.5.5",
   "description": "Small, strict FSM library for deterministic, replayable state machines in any TypeScript/JS app — multi-step forms, checkout funnels, auth flows, tutorials, scene flow. Pure step() lifecycle, opt-in effects, inspect, replay, and a fast-check property-based testing adapter. Browser / Node / Bun / Deno / WebView / Worker friendly.",
   "keywords": [
     "fsm",
@@ -20,13 +20,13 @@
   ],
   "author": "yshengliao",
   "license": "MIT",
-  "homepage": "https://github.com/yshengliao/aifsmjs#readme",
+  "homepage": "https://github.com/islumina/aifsmjs#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yshengliao/aifsmjs.git"
+    "url": "git+https://github.com/islumina/aifsmjs.git"
   },
   "bugs": {
-    "url": "https://github.com/yshengliao/aifsmjs/issues"
+    "url": "https://github.com/islumina/aifsmjs/issues"
   },
   "type": "module",
   "sideEffects": false,
