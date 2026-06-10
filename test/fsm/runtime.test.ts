@@ -477,6 +477,58 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
+  it("emit() snapshots transition listeners before iterating (FAM-S-03)", () => {
+    // Family canonical (aieventjs .slice() before iterate): a listener removed
+    // by another listener DURING dispatch still fires for the current event if
+    // it was registered when the event was emitted. Iterating the live Set
+    // would skip it. Listener A unsubscribes B; B must still fire this round.
+    const runtime = createRuntime(trafficLight, makeImpl());
+    const order: string[] = [];
+    runtime.on("transition", () => {
+      order.push("A");
+      offB(); // remove B mid-dispatch
+    });
+    const offB = runtime.on("transition", () => {
+      order.push("B");
+    });
+    runtime.send({ type: "NEXT" });
+    expect(order).toEqual(["A", "B"]); // B fired despite being removed by A
+    // Next dispatch: B is now gone.
+    order.length = 0;
+    runtime.send({ type: "NEXT" });
+    expect(order).toEqual(["A"]);
+  });
+
+  it("emit() snapshot: a listener added during dispatch does not fire this round (FAM-S-03)", () => {
+    const runtime = createRuntime(trafficLight, makeImpl());
+    const order: string[] = [];
+    runtime.on("transition", () => {
+      order.push("A");
+      // Add C mid-dispatch — must NOT fire for the current event.
+      runtime.on("transition", () => order.push("C"));
+    });
+    runtime.send({ type: "NEXT" }); // red -> green
+    expect(order).toEqual(["A"]);
+    order.length = 0;
+    runtime.send({ type: "NEXT" }); // green -> yellow: A and the added C both fire
+    expect(order).toEqual(["A", "C"]);
+  });
+
+  it("subscribe() snapshots listeners before iterating (FAM-S-03)", () => {
+    // Same canonical guarantee for the subscribe() channel (notify()).
+    const runtime = createRuntime(trafficLight, makeImpl());
+    const order: string[] = [];
+    runtime.subscribe(() => {
+      order.push("A");
+      offB();
+    });
+    const offB = runtime.subscribe(() => {
+      order.push("B");
+    });
+    runtime.send({ type: "NEXT" });
+    expect(order).toEqual(["A", "B"]); // B still fires for this dispatch
+  });
+
   it("on() after dispose is a no-op", () => {
     const runtime = createRuntime(trafficLight, makeImpl());
     runtime.dispose();

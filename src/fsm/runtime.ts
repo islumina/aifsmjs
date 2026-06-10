@@ -111,12 +111,17 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     type: K,
     payload: RuntimeEventMap<Ctx, Evt, States>[K],
   ): void {
-    for (const fn of eventListeners[type]) fn(payload);
+    // Snapshot-before-iterate (family canonical, aieventjs .slice()): a
+    // listener that subscribes/unsubscribes another during dispatch must not
+    // mutate the set being walked. One array alloc per emit, matching the
+    // family's accepted cost (FAM-S-03).
+    for (const fn of Array.from(eventListeners[type])) fn(payload);
   }
 
   function notify(committed?: Snapshot<Ctx, States>) {
     const captured = committed ?? snapshot;
-    for (const l of listeners) l(captured);
+    // Snapshot-before-iterate, as above (FAM-S-03).
+    for (const l of Array.from(listeners)) l(captured);
   }
 
   function runMiddleware(
