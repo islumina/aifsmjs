@@ -249,4 +249,95 @@ describe("createScheduler", () => {
     vi.advanceTimersByTime(200);
     expect(fn).not.toHaveBeenCalled();
   });
+
+  // -------------------------------------------------------------------------
+  // FSM-R-01 — pending Set must not leak entries via the three signal paths.
+  // -------------------------------------------------------------------------
+  describe("pending Set does not leak on signal paths (FSM-R-01)", () => {
+    it("(a) abort-mid-flight: aborting a pending timer's signal drops it from pending", () => {
+      const s = createScheduler();
+      const ac = new AbortController();
+      const fn = vi.fn();
+      s.after(1000, fn, { signal: ac.signal });
+      expect(s.size).toBe(1);
+      ac.abort(); // cancels the timer — must also remove the handle from pending
+      expect(s.size).toBe(0);
+      vi.advanceTimersByTime(1000);
+      expect(fn).not.toHaveBeenCalled();
+    });
+
+    it("(a') abort-mid-flight with a default signal injected at construction", () => {
+      const ac = new AbortController();
+      const s = createScheduler({ signal: ac.signal });
+      s.after(1000, () => {});
+      s.after(2000, () => {});
+      expect(s.size).toBe(2);
+      ac.abort();
+      expect(s.size).toBe(0);
+    });
+
+    it("(b) already-aborted signal: scheduling never grows pending", () => {
+      const s = createScheduler();
+      const ac = new AbortController();
+      ac.abort();
+      const fn = vi.fn();
+      const h = s.after(1000, fn, { signal: ac.signal });
+      // The NOOP handle must not be tracked.
+      expect(s.size).toBe(0);
+      expect(() => h.cancel()).not.toThrow();
+      vi.advanceTimersByTime(1000);
+      expect(fn).not.toHaveBeenCalled();
+      expect(s.size).toBe(0);
+    });
+
+    it("(c) sync-fire: a synchronous custom setTimeout leaves pending empty", () => {
+      // A custom scheduler whose setTimeout fires inline runs `wrapped` before
+      // the tracked handle exists; the delete is skipped, then pending.add runs
+      // anyway — leaving a permanently dead entry. After the fix, an
+      // already-fired timer must not be added.
+      const fn = vi.fn();
+      const s = createScheduler({
+        setTimeout: (cb) => {
+          cb();
+          return 0;
+        },
+        clearTimeout: () => {},
+      });
+      s.after(0, fn);
+      expect(fn).toHaveBeenCalledOnce();
+      expect(s.size).toBe(0);
+    });
+
+    it("(d) abort then explicit cancel() is idempotent (double-settle guard)", () => {
+      const s = createScheduler();
+      const ac = new AbortController();
+      const fn = vi.fn();
+      const h = s.after(1000, fn, { signal: ac.signal });
+      ac.abort(); // settles once (size → 0)
+      expect(s.size).toBe(0);
+      expect(() => h.cancel()).not.toThrow(); // second settle is a no-op
+      expect(s.size).toBe(0);
+      vi.advanceTimersByTime(1000);
+      expect(fn).not.toHaveBeenCalled();
+    });
+
+    it("(c') sync-fire then a normal timer: size reflects only the live timer", () => {
+      let inline = true;
+      const s = createScheduler({
+        setTimeout: (cb, ms) => {
+          if (inline) {
+            cb();
+            return 0;
+          }
+          return globalThis.setTimeout(cb, ms);
+        },
+        clearTimeout: (h) => globalThis.clearTimeout(h),
+      });
+      s.after(0, () => {}); // fires inline → must not linger in pending
+      expect(s.size).toBe(0);
+      inline = false;
+      s.after(1000, () => {}); // real pending timer
+      expect(s.size).toBe(1);
+    });
+  });
 });

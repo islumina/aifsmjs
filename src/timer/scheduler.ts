@@ -109,22 +109,71 @@ export function createScheduler(defaults?: AfterOptions): Scheduler {
   const sched: Scheduler = {
     after(ms, fn, opts) {
       const merged: AfterOptions = { ...defaults, ...opts };
-      // Forward-reference slot so `wrapped` can find the tracked handle
-      // before it is constructed below.
+      // Signal handling is lifted to the scheduler layer: we own one abort
+      // listener per timer and route it through the scheduler-level cancel so
+      // the abort path also removes the handle from `pending`. The inner
+      // after() therefore must NOT see the signal — otherwise it would clear
+      // its timer on abort without ever touching `pending`, leaking the entry
+      // (FSM-R-01, path a).
+      const { signal, ...innerOpts } = merged;
+
+      // Path b: scheduling on an already-aborted signal must not grow the Set.
+      // after() returns NOOP in that case; tracking it would be a permanent
+      // dead entry. Return the same NOOP without adding.
+      if (signal?.aborted) return NOOP;
+
+      // Forward-reference slot so `wrapped`/`cancel` can find the tracked
+      // handle before it is constructed below.
       const slot: { ref?: AfterHandle } = {};
-      const wrapped = () => {
+      let fired = false;
+      let settled = false; // true once removed from pending (fire or cancel)
+
+      const detachAbort = () => {
+        if (signal) signal.removeEventListener("abort", onAbort);
+      };
+
+      // Single removal path shared by fire, explicit cancel, and abort.
+      const settle = () => {
+        if (settled) return;
+        settled = true;
         if (slot.ref) pending.delete(slot.ref);
+        detachAbort();
+      };
+
+      const wrapped = () => {
+        fired = true;
+        settle();
         fn();
       };
-      const inner = after(ms, wrapped, merged);
-      const handle: AfterHandle = Object.freeze({
-        cancel() {
-          inner.cancel();
-          if (slot.ref) pending.delete(slot.ref);
-        },
-      });
+
+      // Scheduler-level cancel: cancel the inner timer AND drop from pending
+      // AND detach the abort listener. Registered on the abort path too.
+      const cancel = () => {
+        inner.cancel();
+        settle();
+      };
+      function onAbort() {
+        cancel();
+      }
+
+      const inner = after(ms, wrapped, innerOpts);
+
+      const handle: AfterHandle = Object.freeze({ cancel });
       slot.ref = handle;
-      pending.add(handle);
+
+      // Path c (sync-fire): a custom setTimeout may fire `wrapped` inline,
+      // during the after() call above — before we reach here. In that case the
+      // timer is already done; adding it now would leave a permanent dead
+      // entry. Only track timers that are still live.
+      if (!fired) {
+        pending.add(handle);
+        // Attach the abort listener only for a live timer on a real signal.
+        // { once: true } removes it on abort; settle()/detachAbort() remove it
+        // on fire/cancel so a long-lived shared signal never accumulates dead
+        // listeners.
+        if (signal) signal.addEventListener("abort", onAbort, { once: true });
+      }
+
       return handle;
     },
     cancelAll() {
