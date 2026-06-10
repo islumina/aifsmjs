@@ -180,6 +180,28 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     return () => controller.signal.removeEventListener("abort", onAbort);
   }
 
+  // §3.1 Instantiate the child for `stateValue` (which must have a `sub`) and
+  // wire its parent-abort listener, committing both to childRuntime /
+  // childAbortCleanup. Throws SubMachineError(phase: "init") on failure; the
+  // caller must NOT commit the parent snapshot on throw. Single source of the
+  // init+wire sequence shared by applySubLifecycle, reset(), and bootstrap
+  // (FSM-C-01) — keeps the most failure-sensitive path in one place.
+  function initChildFor(stateValue: States): void {
+    const stateDef = def.states[stateValue];
+    const sub = stateDef?.sub;
+    /* v8 ignore next 2 — callers only invoke this after checking stateDef.sub
+       is defined; the guard documents that precondition and is never taken. */
+    if (sub === undefined) return;
+    let newChild: Runtime<unknown, { type: string }, string>;
+    try {
+      newChild = createRuntime(sub, stateDef.subImpl ?? {});
+    } catch (cause) {
+      throw new SubMachineError(stateValue as string, "init", cause);
+    }
+    childRuntime = newChild;
+    childAbortCleanup = wireChildAbort(newChild);
+  }
+
   // §3.3 Re-resolve guards to find the chosen transition and determine
   // whether it is external (has a `target`). Replaces the v0.3.0 dev
   // hasSelfTargetMarker heuristic that over-reported when an event had both
@@ -218,14 +240,7 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
       }
     }
     if (nextStateDef?.sub !== undefined) {
-      let newChild: Runtime<unknown, { type: string }, string>;
-      try {
-        newChild = createRuntime(nextStateDef.sub, nextStateDef.subImpl ?? {});
-      } catch (cause) {
-        throw new SubMachineError(nextValue as string, "init", cause);
-      }
-      childRuntime = newChild;
-      childAbortCleanup = wireChildAbort(newChild);
+      initChildFor(nextValue);
     }
   }
 
@@ -276,15 +291,7 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     // Init child for new initial state if it has sub (§3.5)
     const initStateDef = def.states[nextSnap.value];
     if (initStateDef?.sub) {
-      let newChild: Runtime<unknown, { type: string }, string>;
-      try {
-        newChild = createRuntime(initStateDef.sub, initStateDef.subImpl ?? {});
-      } catch (cause) {
-        /* v8 ignore next — reset() init failure: only reachable if frozen sub def somehow rejects post-bootstrap */
-        throw new SubMachineError(nextSnap.value as string, "init", cause);
-      }
-      childRuntime = newChild;
-      childAbortCleanup = wireChildAbort(newChild);
+      initChildFor(nextSnap.value);
     }
     snapshot = nextSnap;
     // Capture the committed snapshot before notify()/emit so a subscriber that
@@ -406,17 +413,10 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
   };
 
   // §2 Bootstrap: if initial state has sub, instantiate child BEFORE returning.
-  // Failure throws SubMachineError(initialState, "init", cause) from createRuntime itself.
+  // Failure throws SubMachineError(initialState, "init", cause).
   const bootStateDef = def.states[snapshot.value];
   if (bootStateDef?.sub) {
-    let newChild: Runtime<unknown, { type: string }, string>;
-    try {
-      newChild = createRuntime(bootStateDef.sub, bootStateDef.subImpl ?? {});
-    } catch (cause) {
-      throw new SubMachineError(snapshot.value as string, "init", cause);
-    }
-    childRuntime = newChild;
-    childAbortCleanup = wireChildAbort(newChild);
+    initChildFor(snapshot.value);
   }
 
   return runtime;
