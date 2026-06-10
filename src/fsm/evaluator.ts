@@ -41,8 +41,13 @@ export function isAsyncGuardFn(fn: unknown): boolean {
  * Detect a thenable (PromiseLike) — anything with a callable `then`. Used in
  * place of `instanceof Promise` so cross-realm Promises (iframe / worker /
  * vm context) and user-defined thenables are also rejected.
+ *
+ * Exported for the guard combinators (`and`/`or`/`not`), which must apply the
+ * same async-guard rejection to the values their inner guards return —
+ * otherwise a nested thenable is coerced truthy inside the combinator and the
+ * top-level `evalGuard` check never sees it (FSM-S-01).
  */
-function isThenable(x: unknown): x is PromiseLike<unknown> {
+export function isThenable(x: unknown): x is PromiseLike<unknown> {
   return (
     x !== null &&
     (typeof x === "object" || typeof x === "function") &&
