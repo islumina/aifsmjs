@@ -304,6 +304,8 @@ const runtime = createRuntime(def, impl, {
 
 Koa-style `(ctx, next) => void` pipeline. `ctx` is `{ prev, next, event, effects, changed }`, all deep-frozen. **Cannot cancel a transition** — `next()` must be called; the return value carries no meaning.
 
+Two boundaries to respect (both stable for 1.x, detailed in [STABILITY.md](STABILITY.md)): skipping `next()` is **not** enforced and silently drops every later middleware (and the `recorder` / `persist` sinks) for that event; and a synchronous throw from a middleware (e.g. `persist` on non-serialisable context) propagates to the caller but leaves the snapshot **committed yet unannounced** — `notify()` and `on('transition')` are skipped. Do **not** call `runtime.send()` from inside the pipeline: the inner event runs its full pipeline before the outer frame finishes, so the `recorder` log is reordered and `replay()` diverges.
+
 ### `aifsmjs/replay` — Pure event log replay
 
 ```typescript
@@ -508,7 +510,7 @@ Example-first, PBT-augmented. Lesson from jssm: "3000+ tests / 100% coverage" tu
 
 - **Example tests** (vitest): for every src module, write happy path + edge + error-message triplets.
 - **PBT smoke**: each generic property runs 50 iterations as an invariant guard, not as a coverage source.
-- **CI-enforced thresholds**: `@vitest/coverage-v8` is wired to **100% statements / 100% lines / 100% functions / ≥90% branches**. The few defensive invariant-guard branches (e.g. runtime determinism mismatch) carry `/* v8 ignore */` annotations with rationale.
+- **CI-enforced thresholds**: `@vitest/coverage-v8` is wired to **100% lines / 100% functions / ≥95% statements / ≥90% branches**. The few defensive invariant-guard branches (e.g. runtime determinism mismatch) carry `/* v8 ignore */` annotations with rationale.
 - **Size budget**: `scripts/check-size.mjs` enforces per-subpath gzip caps in CI — core ≤4.7 KB (raised in 0.3.0 for sub-machine sugar), replay ≤1.8 KB, pbt ≤5.5 KB (raised in 0.3.0 because `pbt` transitively imports `createRuntime`), others ≤1 KB. Exceeding any cap fails the build.
 
 ### The 6 built-in generic properties
@@ -1001,6 +1003,39 @@ pending instability.
   switch to a two-phase "init before dispose" commit strategy (a breaking
   change reserved for 1.0+), but the current semantics are frozen for the
   1.x line.
+
+### Middleware, effects & notification ordering (documented boundaries)
+
+These are intentional ordering boundaries of the read-only middleware /
+effect pipeline, not bugs. They are stable for the 1.x line.
+
+- **A synchronous throw from a middleware or effect handler leaves the
+  snapshot committed but unannounced.** Inside `send()` / `reset()` the new
+  snapshot is committed (so `getSnapshot()` already reflects it) *before*
+  `runMiddleware()` and effect dispatch run. If a middleware or effect
+  handler throws synchronously, the throw propagates to the `send()` /
+  `reset()` caller (as documented), but `notify()`, `on('transition')`
+  listeners, and — for a middleware throw — the collected effects are
+  skipped. Observers therefore desynchronise from `getSnapshot()`. The
+  shipped `persist` middleware throws on non-serialisable context, making
+  this reachable without exotic code. Wrap throwing middleware/effects in
+  your own `try/catch` if you need observers to fire regardless. (Contrast:
+  the sub-machine init/dispose failure path *rolls back* instead — see
+  above.) A future **major** may move the commit after the pipeline; the
+  current order is frozen for 1.x.
+- **`next()` must be called by every middleware; skipping it is not
+  enforced.** Calling `next()` twice throws; calling it zero times is
+  silently tolerated and drops every later middleware (and the recorder /
+  persist sinks) for that event — no throw, no warning. The state transition
+  itself is unaffected (the snapshot is committed before the pipeline). Treat
+  `next()` as mandatory.
+- **Re-entrant `send()` from inside middleware reorders recorder logs.**
+  Middleware is documented read-only; a middleware that re-entrantly calls
+  `runtime.send()` runs the inner event's full pipeline (including the
+  recorder push) before the outer frame reaches the recorder. The
+  `recorder` sink — intended to feed `replay()` — then lists `[inner,
+  outer]` for an application order of `[outer, inner]`, so replaying that log
+  diverges. Do not `send()` from within the middleware pipeline.
 
 ## Experimental
 

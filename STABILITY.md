@@ -72,6 +72,39 @@ pending instability.
   change reserved for 1.0+), but the current semantics are frozen for the
   1.x line.
 
+### Middleware, effects & notification ordering (documented boundaries)
+
+These are intentional ordering boundaries of the read-only middleware /
+effect pipeline, not bugs. They are stable for the 1.x line.
+
+- **A synchronous throw from a middleware or effect handler leaves the
+  snapshot committed but unannounced.** Inside `send()` / `reset()` the new
+  snapshot is committed (so `getSnapshot()` already reflects it) *before*
+  `runMiddleware()` and effect dispatch run. If a middleware or effect
+  handler throws synchronously, the throw propagates to the `send()` /
+  `reset()` caller (as documented), but `notify()`, `on('transition')`
+  listeners, and — for a middleware throw — the collected effects are
+  skipped. Observers therefore desynchronise from `getSnapshot()`. The
+  shipped `persist` middleware throws on non-serialisable context, making
+  this reachable without exotic code. Wrap throwing middleware/effects in
+  your own `try/catch` if you need observers to fire regardless. (Contrast:
+  the sub-machine init/dispose failure path *rolls back* instead — see
+  above.) A future **major** may move the commit after the pipeline; the
+  current order is frozen for 1.x.
+- **`next()` must be called by every middleware; skipping it is not
+  enforced.** Calling `next()` twice throws; calling it zero times is
+  silently tolerated and drops every later middleware (and the recorder /
+  persist sinks) for that event — no throw, no warning. The state transition
+  itself is unaffected (the snapshot is committed before the pipeline). Treat
+  `next()` as mandatory.
+- **Re-entrant `send()` from inside middleware reorders recorder logs.**
+  Middleware is documented read-only; a middleware that re-entrantly calls
+  `runtime.send()` runs the inner event's full pipeline (including the
+  recorder push) before the outer frame reaches the recorder. The
+  `recorder` sink — intended to feed `replay()` — then lists `[inner,
+  outer]` for an application order of `[outer, inner]`, so replaying that log
+  diverges. Do not `send()` from within the middleware pipeline.
+
 ## Experimental
 
 No experimental APIs as of 0.4.0. The 0.3.0 sub-machine surface graduated to
