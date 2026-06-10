@@ -434,6 +434,40 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
     expect((errors[0] as Error).message).toBe("boom");
   });
 
+  it("on('error') fires for a rejecting PromiseLike (non-Promise) effect result (FSM-B-03)", async () => {
+    // A cross-realm Promise / user-defined thenable fails `instanceof Promise`,
+    // so its rejection previously bypassed the 'error' channel and became an
+    // unhandled rejection. isThenable + Promise.resolve() wrapping routes it.
+    const errors: unknown[] = [];
+    const rejectingThenable: PromiseLike<void> = {
+      // biome-ignore lint/suspicious/noThenProperty: deliberately a PromiseLike to exercise the non-Promise thenable path
+      then<TResult1 = void, TResult2 = never>(
+        _onFulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null,
+        onRejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+      ): PromiseLike<TResult1 | TResult2> {
+        return Promise.resolve().then(() =>
+          onRejected ? onRejected(new Error("thenable-boom")) : (undefined as TResult2),
+        );
+      },
+    };
+    const runtime = createRuntime(trafficLight, {
+      ...makeImpl(),
+      effects: {
+        trackTransition: () => rejectingThenable as unknown as Promise<void>,
+        logEnter: () => {},
+      },
+    });
+    runtime.on("error", (e) => {
+      errors.push(e.error);
+    });
+    runtime.send({ type: "NEXT" });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as Error).message).toBe("thenable-boom");
+  });
+
   it("on() returned unsubscribe removes the listener", () => {
     const runtime = createRuntime(trafficLight, makeImpl());
     const fn = vi.fn();

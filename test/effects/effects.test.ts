@@ -52,6 +52,33 @@ describe("runEffects", () => {
     expect(promises).toHaveLength(1);
   });
 
+  it("awaits a PromiseLike (non-Promise) handler result (FSM-B-03)", async () => {
+    // A thenable that is not a native Promise — e.g. a cross-realm Promise or
+    // a user-defined PromiseLike. instanceof Promise misses it; isThenable
+    // catches it. The result must be collected so callers can flush it.
+    let resolved = false;
+    const thenable: PromiseLike<void> = {
+      // biome-ignore lint/suspicious/noThenProperty: deliberately a PromiseLike to exercise the non-Promise thenable path
+      then<TResult1 = void, TResult2 = never>(
+        onFulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null,
+      ): PromiseLike<TResult1 | TResult2> {
+        resolved = true;
+        return Promise.resolve(onFulfilled ? onFulfilled() : (undefined as TResult1));
+      },
+    };
+    const handlers: Record<string, EffectHandler<unknown, unknown>> = {
+      a: () => thenable as unknown as Promise<void>,
+    };
+    const promises = runEffects([{ type: "a" }], handlers, {
+      context: null,
+      event: {},
+      signal: neverSignal,
+    });
+    expect(promises).toHaveLength(1);
+    await Promise.all(promises);
+    expect(resolved).toBe(true);
+  });
+
   it("skips unhandled effect types", () => {
     const handler = vi.fn();
     const handlers: Record<string, EffectHandler<unknown, unknown>> = { a: handler };

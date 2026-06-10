@@ -1,5 +1,5 @@
 import { initialSnapshot } from "./definition.js";
-import { evalGuard } from "./evaluator.js";
+import { evalGuard, isThenable } from "./evaluator.js";
 import { step } from "./lifecycle.js";
 import { normalizeTransitions } from "./resolver.js";
 import { deepFreeze } from "./snapshot.js";
@@ -135,8 +135,11 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
       const handler = impl.effects[eff.type];
       if (!handler) continue;
       const r = handler(eff, { context, event, signal: controller.signal });
-      if (r instanceof Promise) {
-        r.catch((err: unknown) => {
+      // isThenable (not instanceof Promise) so cross-realm Promises and
+      // user-defined PromiseLike results also have their rejections routed to
+      // the 'error' channel; Promise.resolve() normalises them (FSM-B-03).
+      if (isThenable(r)) {
+        Promise.resolve(r).catch((err: unknown) => {
           emit("error", { error: err, event });
         });
       }
