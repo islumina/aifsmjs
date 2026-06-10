@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-06-10
+
+### Fixed
+
+- **Guard combinators route through the async-guard safety net** — `and()` / `or()` / `not()` now pass each resolved guard's return value through the same `isThenable` check as top-level guards, throwing `AsyncGuardError` instead of coercing a pending thenable to `true`/`false`. The 0.2.0 async-guard protection was bypassable through any combinator. (Review wave 2026-06-10, FSM-S-01.)
+- **`reset()` captures the committed snapshot before notifying** (mirroring the 0.2.0 `send()` fix), so a listener that re-enters `send()` during reset can no longer make the `'transition'` payload report a state pair that never occurred. (FSM-B-01.)
+- **Scheduler `pending` registry no longer leaks** on any of its three escape paths: signal-abort cancellation, scheduling on an already-aborted signal, and a custom scheduler that fires synchronously during `after()`. Signal handling is owned by the scheduler layer now; fire/cancel/abort all remove the tracked handle and detach the abort listener. (FSM-R-01.)
+- PBT property #5 `guardsFalseNoTransition` actually asserts `changed === false` (its body was vacuous — it returned `true` unconditionally); the other five generic properties were audited and are non-vacuous. (FSM-B-02.)
+- Hierarchical `sub.initial` is validated as a member of `sub.states` at definition time. (FSM-S-02.)
+- Effect results are detected with `isThenable` instead of `instanceof Promise` at both dispatch sites, so cross-realm / userland PromiseLike values are awaited and error-routed correctly. (FSM-B-03.)
+- `emit()` / `notify()` snapshot their listener sets before iterating (family-canonical), pinning unsubscribe/re-subscribe-during-dispatch semantics. (FAM-S-03.)
+
+### Changed
+
+- **Code splitting enabled (`tsup splitting: true`)** — the published 0.5.x dist inlined a private copy of the shared runtime (including every error class) into each subpath bundle, so an error raised through `aifsmjs/guards` failed `instanceof` checks against the root export. Shared chunks restore cross-subpath class identity; total dist JS shrank 50.7 KB → 31.1 KB. `check:size` now measures each entry's transitive chunk closure, with budgets recalibrated and the README size-budget bullet updated to match.
+- Triplicated child init/wire logic extracted into a single `initChildFor()` helper (behaviour-preserving).
+- Supply-chain and release hardening: CI/publish actions SHA-pinned, npm CLI pinned (`11.16.0`), `permissions: contents: read` on CI, job timeouts, `npm publish --ignore-scripts`, manual dispatch defaults to dry-run, new `verify:docs` banner gate, two-stage typecheck (tests are now type-checked), `llms-full.txt` embeds `STABILITY.md`, and a cross-subpath dist smoke (`verify:dist`).
+
+### Docs
+
+- README coverage claim corrected to the enforced thresholds (95% statements); middleware sync-throw commit/notify boundary and `next()`-skip behaviour documented (with characterisation tests); README status banner added (EN + ZHTW).
+
 ## [0.5.5] - 2026-06-08
 
 ### Changed
