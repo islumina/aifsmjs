@@ -308,6 +308,44 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
     expect(events).toEqual(["red->green", "green->yellow"]);
   });
 
+  it("reset() 'transition' payload is captured pre-reentry (FSM-B-01 / FSM-T-03)", () => {
+    // Mirror of the send() re-entrancy regression above, but with reset() as
+    // the OUTER call. reset() ran notify() (which fires subscribe listeners)
+    // before reading the live `snapshot` for the emitted 'transition' payload.
+    // A subscriber that re-entrantly send()s advances `snapshot`, so reset's
+    // emitted next pointed at the re-entry's state instead of the reset target
+    // — an event whose prev/next pair never actually happened.
+    const runtime = createRuntime(trafficLight, makeImpl());
+    runtime.send({ type: "NEXT" }); // red -> green, so reset() is a real change
+
+    const resetPayloads: string[] = [];
+    runtime.on("transition", (e) => {
+      // Record only the reset event's payload (triggerEvent type is the
+      // synthetic reset marker, not "NEXT").
+      if (e.event.type !== "NEXT") {
+        resetPayloads.push(`${e.prev.value}->${e.next.value}`);
+      }
+    });
+
+    let reenterOnce = true;
+    const unsub = runtime.subscribe((snap) => {
+      // Fires inside reset()'s notify(); re-enter with a send() the first time.
+      if (snap.value === "red" && reenterOnce) {
+        reenterOnce = false;
+        runtime.send({ type: "NEXT" }); // red -> green, inside reset()'s notify
+      }
+    });
+
+    runtime.reset();
+    unsub();
+
+    // The reset genuinely went green -> red; its emitted payload must say so,
+    // not "green->green" (aliasing the re-entry's outcome into next).
+    expect(resetPayloads).toEqual(["green->red"]);
+    // And the live snapshot reflects the re-entrant send that ran last.
+    expect(runtime.getSnapshot().value).toBe("green");
+  });
+
   it("on('dispose') fires once when runtime is disposed", () => {
     const runtime = createRuntime(trafficLight, makeImpl());
     const fn = vi.fn();

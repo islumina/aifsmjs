@@ -279,18 +279,25 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
       childAbortCleanup = wireChildAbort(newChild);
     }
     snapshot = nextSnap;
+    // Capture the committed snapshot before notify()/emit so a subscriber that
+    // re-entrantly send()s (which advances the mutable `snapshot`) cannot
+    // corrupt this reset's payload — mirrors send()'s 0.2.0 fix (FSM-B-01).
+    const committed = nextSnap;
     const triggerEvent: Evt | ResetEvent = event ?? RESET_EVENT;
     runMiddleware(prev, triggerEvent, [], changed);
     if (changed) {
-      notify();
+      notify(committed);
       emit("transition", {
         prev,
-        next: snapshot,
+        next: committed,
         event: triggerEvent,
         effects: [],
         changed: true,
       } as RuntimeTransitionEvent<Ctx, Evt, States>);
     }
+    // Return the live snapshot (consistent with send()): under a re-entrant
+    // send() from a subscriber, this reflects the latest committed state. Only
+    // the emitted payload above is pinned to this reset's own outcome.
     return snapshot;
   }
 
