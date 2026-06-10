@@ -10,6 +10,8 @@
 
 隸屬 [ai\*js micro-runtime 生態系](https://github.com/islumina) ─ 另見 [aibridgejs](https://github.com/islumina/aibridgejs)（cross-context RPC）與 [aiecsjs](https://github.com/islumina/aiecsjs)（ECS）。
 
+> **狀態：0.5.5。** 核心 FSM、階層式 sub-machine、guards 與 effects、scheduler、replay、inspect、PBT helpers 全部上線。發版歷史見 [CHANGELOG.md](CHANGELOG.md)。
+
 **主要受眾**：所有處理 stateful flow 的工程師 ── 多步驟表單、checkout 流程、auth flow、教學引導步驟、文件審批狀態機、互動 app 的 scene flow，以及瀏覽器遊戲的相同模式（PixiJS / Svelte 5 / 純 Canvas / WebGL）。Library 本身**環境中立**（pure core + adapter 邊界）：browser、Node、Bun、Deno、Flutter WebView、Web Worker 全部都跑。Roadmap 段把遊戲特有的便利功能（tick hook、ECS bridge）保留為 opt-in subpath，不進 core surface。
 
 ---

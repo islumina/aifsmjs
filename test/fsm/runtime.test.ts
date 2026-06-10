@@ -285,7 +285,9 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
     // state instead of the state that paired with the outer event.
     const events: string[] = [];
     const runtime = createRuntime(trafficLight, {
-      actions: makeImpl().actions,
+      // `?? {}` keeps the property non-undefined under exactOptionalPropertyTypes
+      // (Implementations.actions is optional, so makeImpl().actions is T|undefined).
+      actions: makeImpl().actions ?? {},
       effects: {
         // The "green" entry produces no effect by default; we splice in a
         // reentry by listening to transitions and re-sending.

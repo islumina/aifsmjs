@@ -10,6 +10,8 @@
 
 Part of the [ai\*js micro-runtime ecosystem](https://github.com/islumina) — see also [aibridgejs](https://github.com/islumina/aibridgejs) (cross-context RPC) and [aiecsjs](https://github.com/islumina/aiecsjs) (ECS).
 
+> **Status: 0.5.5.** Core FSM, hierarchical sub-machines, guards & effects, scheduler, replay, inspect, and PBT helpers are all live. See [CHANGELOG.md](CHANGELOG.md) for release history.
+
 **Primary audience**: developers building stateful flows — multi-step forms, checkout funnels, auth flows, tutorial sequences, document-status workflows, scene flow in interactive apps, and the same patterns in browser-based games (PixiJS / Svelte 5 / plain Canvas / WebGL). The core is **environment-neutral** (pure function + adapter boundary): browser, Node, Bun, Deno, Flutter WebView, and Web Workers all work. The Roadmap section keeps gaming-specific niceties (tick hook, ECS bridge) as opt-in subpaths, not core surface.
 
 ---

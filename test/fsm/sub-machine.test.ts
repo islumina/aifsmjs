@@ -1,6 +1,6 @@
 import * as fc from "fast-check";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { defineMachine, setup } from "../../src/fsm/definition.js";
+import { defineMachine } from "../../src/fsm/definition.js";
 import { SubMachineError, createRuntime } from "../../src/fsm/runtime.js";
 import type { Implementations, MachineDef, Runtime } from "../../src/fsm/types.js";
 import {
@@ -87,7 +87,7 @@ describe("Group A — Type extension + validation", () => {
 
 describe("Group B — Initial sub-machine instantiation", () => {
   it("B1: createRuntime of machine whose initial state has sub returns a Runtime from subRuntime()", () => {
-    const def = setup<{ n: number }, { type: "GO" }>().defineMachine({
+    const def = defineMachine<{ n: number }, { type: "GO" }, "a" | "b">({
       id: "initial-sub",
       initial: "a",
       context: { n: 0 },
@@ -107,7 +107,7 @@ describe("Group B — Initial sub-machine instantiation", () => {
   });
 
   it("B2: that child's getSnapshot().value equals child initial state", () => {
-    const def = setup<{ n: number }, { type: "GO" }>().defineMachine({
+    const def = defineMachine<{ n: number }, { type: "GO" }, "a" | "b">({
       id: "initial-sub-snap",
       initial: "a",
       context: { n: 0 },
@@ -138,7 +138,7 @@ describe("Group B — Initial sub-machine instantiation", () => {
       context: {},
       states: { x: { sub: innerBadSub } }, // x.sub has null states → createRuntime throws
     };
-    const def = setup<{ n: number }, { type: "GO" }>().defineMachine({
+    const def = defineMachine<{ n: number }, { type: "GO" }, "a" | "b">({
       id: "bad-initial-sub",
       initial: "a",
       context: { n: 0 },
@@ -242,7 +242,7 @@ describe("Group D — Both-states-have-sub transition", () => {
       context: { n: 2 },
       states: { s2: {} },
     });
-    return setup<{}, { type: "SWITCH" }>().defineMachine({
+    return defineMachine<{}, { type: "SWITCH" }, "stateA" | "stateB">({
       id: "two-sub-parent",
       initial: "stateA",
       context: {},
@@ -352,12 +352,33 @@ describe("Group E — Self-targeting external", () => {
 // ---------------------------------------------------------------------------
 
 describe("Group F — Internal transition", () => {
+  // Parent impl typed for THIS group's event union (START | INTERNAL |
+  // FINISH). parentImpl is typed for START | FINISH | RETRY, so spreading it
+  // here is contravariantly incompatible under the activated test typecheck;
+  // the action bodies are event-agnostic, so we rebuild them against the
+  // correct union. Runtime behaviour is identical.
+  const internalImpl: Implementations<
+    { step: number },
+    { type: "START" } | { type: "INTERNAL" } | { type: "FINISH" }
+  > = {
+    actions: {
+      logParentEnter: () => {
+        log.push("parent:enter");
+        return undefined;
+      },
+      logParentExit: () => {
+        log.push("parent:exit");
+        return undefined;
+      },
+    },
+  };
   // Build a parent with an internal transition (no target) in loading
   function makeInternalParent() {
-    return setup<
+    return defineMachine<
       { step: number },
-      { type: "START" } | { type: "INTERNAL" } | { type: "FINISH" }
-    >().defineMachine({
+      { type: "START" } | { type: "INTERNAL" } | { type: "FINISH" },
+      "idle" | "loading" | "done"
+    >({
       id: "internal-parent",
       initial: "idle",
       context: { step: 0 },
@@ -380,8 +401,7 @@ describe("Group F — Internal transition", () => {
   }
 
   it("F1: internal transition leaves child reference identity-equal", () => {
-    const impl = { ...parentImpl };
-    const rt = createRuntime(makeInternalParent(), impl);
+    const rt = createRuntime(makeInternalParent(), internalImpl);
     rt.send({ type: "START" });
     const childBefore = rt.subRuntime();
     rt.send({ type: "INTERNAL" });
@@ -390,8 +410,7 @@ describe("Group F — Internal transition", () => {
   });
 
   it("F2: internal transition actions still run; child entry/exit NOT fired", () => {
-    const impl = { ...parentImpl };
-    const rt = createRuntime(makeInternalParent(), impl);
+    const rt = createRuntime(makeInternalParent(), internalImpl);
     rt.send({ type: "START" });
     resetLog();
     rt.send({ type: "INTERNAL" });
@@ -426,7 +445,7 @@ describe("Group G — reset() interactions", () => {
   });
 
   it("G3: reset() to an initial state that has sub → fresh child created", () => {
-    const def = setup<{ n: number }, { type: "GO" }>().defineMachine({
+    const def = defineMachine<{ n: number }, { type: "GO" }, "a" | "b">({
       id: "reset-with-sub",
       initial: "a",
       context: { n: 0 },
@@ -450,7 +469,7 @@ describe("Group G — reset() interactions", () => {
   });
 
   it("G4: same-state reset() while in initial sub-bearing state → old child disposed, new child instantiated", () => {
-    const def = setup<{ n: number }, { type: "GO" }>().defineMachine({
+    const def = defineMachine<{ n: number }, { type: "GO" }, "a" | "b">({
       id: "same-state-reset",
       initial: "a",
       context: { n: 0 },
@@ -485,7 +504,7 @@ describe("Group G — reset() interactions", () => {
       context: {},
       states: { x: { sub: innerBadSub } },
     };
-    const def = setup<{ n: number }, { type: "GO" }>().defineMachine({
+    const def = defineMachine<{ n: number }, { type: "GO" }, "a" | "b">({
       id: "reset-init-throw",
       initial: "a",
       context: { n: 0 },
@@ -505,7 +524,7 @@ describe("Group G — reset() interactions", () => {
     // then mock the definition so reset() fails.
     //
     // Simpler: manipulate the def.states directly AFTER runtime is created.
-    const workingDef = setup<{ n: number }, { type: "GO" }>().defineMachine({
+    const workingDef = defineMachine<{ n: number }, { type: "GO" }, "idle" | "loaded">({
       id: "reset-init-throw-2",
       initial: "idle",
       context: { n: 0 },
@@ -617,7 +636,11 @@ describe("Group I — SubMachineError rollback", () => {
       context: {},
       states: { x: { sub: innerBadSub } }, // x.sub has states:null → createRuntime throws
     };
-    return setup<{ step: number }, { type: "START" } | { type: "FINISH" }>().defineMachine({
+    return defineMachine<
+      { step: number },
+      { type: "START" } | { type: "FINISH" },
+      "idle" | "loading" | "done"
+    >({
       id: "throwing-init-parent",
       initial: "idle",
       context: { step: 0 },
