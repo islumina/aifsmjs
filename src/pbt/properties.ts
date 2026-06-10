@@ -1,6 +1,7 @@
 import * as fc from "fast-check";
 import { initialSnapshot } from "../fsm/definition.js";
 import { step } from "../fsm/lifecycle.js";
+import { normalizeTransitions } from "../fsm/resolver.js";
 import { createRuntime } from "../fsm/runtime.js";
 import type { Guard, Implementations, MachineDef } from "../fsm/types.js";
 import { mergeContext } from "../fsm/updater.js";
@@ -125,11 +126,15 @@ export function replayEqualsFold<Ctx, Evt extends { type: string }, States exten
 }
 
 /**
- * #5 guardsFalseNoTransition — when every candidate transition for a (state,
- * event) pair has a guard that returns `false`, the snapshot is unchanged.
+ * #5 guardsFalseNoTransition — when every candidate transition for the current
+ * (state, event) pair carries a guard and every guard returns `false`, the
+ * snapshot is unchanged (`changed === false`).
  *
  * Implementation: synthesise an impl that forces every guard to `false`, then
- * confirm no event in the arbitrary set causes a transition.
+ * for each step whose candidate list is fully guarded, assert the step did not
+ * change state. Steps with an unguarded fallback candidate (which fires even
+ * when all guards are false) are skipped — the README claim is specifically
+ * about the all-guards-false case.
  */
 export function guardsFalseNoTransition<Ctx, Evt extends { type: string }, States extends string>(
   def: MachineDef<Ctx, Evt, States>,
@@ -147,16 +152,28 @@ export function guardsFalseNoTransition<Ctx, Evt extends { type: string }, State
     ...impl,
     guards: blockedGuards,
   };
+  // True when every candidate transition for (value, eventType) carries a
+  // guard — i.e. blocking all guards leaves no unconditional fallback, so a
+  // correct step() must report changed === false.
+  const isFullyGuarded = (value: States, eventType: string): boolean => {
+    const candidates = normalizeTransitions(def.states[value]?.on?.[eventType]);
+    return candidates.length > 0 && candidates.every((t) => t.guard !== undefined);
+  };
   fc.assert(
     fc.property(
       fc.array(fc.oneof(...Object.values(eventArbitraries)), { maxLength: 16 }),
       (events) => {
         let snap = initialSnapshot(def);
         for (const e of events) {
+          const fullyGuarded = isFullyGuarded(snap.value, e.type);
           const r = step(def, snap, e, blockedImpl);
+          // The named invariant: all guards false + no unconditional fallback
+          // ⇒ no transition. Without this assertion the property was vacuous
+          // (it only failed if step() threw).
+          if (fullyGuarded && r.changed !== false) return false;
           snap = r.snapshot;
         }
-        return true; // Property holds: stepping never throws or corrupts state.
+        return true;
       },
     ),
     buildAssertOpts(opts),

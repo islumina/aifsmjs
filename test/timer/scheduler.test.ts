@@ -331,7 +331,7 @@ describe("createScheduler", () => {
           }
           return globalThis.setTimeout(cb, ms);
         },
-        clearTimeout: (h) => globalThis.clearTimeout(h),
+        clearTimeout: (h) => globalThis.clearTimeout(h as ReturnType<typeof setTimeout>),
       });
       s.after(0, () => {}); // fires inline → must not linger in pending
       expect(s.size).toBe(0);

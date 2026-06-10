@@ -108,7 +108,10 @@ describe("and/or/not — async-guard safety net (FSM-S-01)", () => {
   });
 
   it("nested combinators: thenable buried two levels deep still throws", () => {
-    const g = and<Ctx, Evt>([positive, or<Ctx, Evt>([({ context }) => context.n > 100, thenableGuard])]);
+    const g = and<Ctx, Evt>([
+      positive,
+      or<Ctx, Evt>([({ context }) => context.n > 100, thenableGuard]),
+    ]);
     expect(() => g({ context: { n: 1 }, event: { type: "X" } })).toThrow(AsyncGuardError);
   });
 
@@ -118,7 +121,9 @@ describe("and/or/not — async-guard safety net (FSM-S-01)", () => {
   });
 
   it("boolean-returning combinators are unaffected (no false positives)", () => {
-    expect(and<Ctx, Evt>([positive, small])({ context: { n: 2 }, event: { type: "X" } })).toBe(true);
+    expect(and<Ctx, Evt>([positive, small])({ context: { n: 2 }, event: { type: "X" } })).toBe(
+      true,
+    );
     expect(not<Ctx, Evt>(positive)({ context: { n: 0 }, event: { type: "X" } })).toBe(true);
   });
 });
