@@ -79,6 +79,24 @@ describe("Group A — Type extension + validation", () => {
       }),
     ).toThrow(/sub is not a valid sub-machine definition/);
   });
+
+  it("A5: defineMachine throws when state.sub.initial is a string but not a member of sub.states (FSM-S-02)", () => {
+    // Shallow validation accepted any string `initial`; a sub whose initial
+    // is not one of its own states boots with snapshot.value pointing at a
+    // non-existent state, and step() then no-ops every event forever — a
+    // live-looking but permanently dead child. Construction must reject it.
+    expect(() =>
+      defineMachine<{}, { type: "X" }, "s">({
+        id: "bad-sub-initial-not-member",
+        initial: "s",
+        context: {},
+        states: {
+          // biome-ignore lint/suspicious/noExplicitAny: intentionally broken for error test
+          s: { sub: { id: "x", initial: "ghost", context: {}, states: { a: {} } } as any },
+        },
+      }),
+    ).toThrow(/sub is not a valid sub-machine definition/);
+  });
 });
 
 // ---------------------------------------------------------------------------
