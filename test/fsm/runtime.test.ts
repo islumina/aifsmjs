@@ -285,7 +285,9 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
     // state instead of the state that paired with the outer event.
     const events: string[] = [];
     const runtime = createRuntime(trafficLight, {
-      actions: makeImpl().actions,
+      // `?? {}` keeps the property non-undefined under exactOptionalPropertyTypes
+      // (Implementations.actions is optional, so makeImpl().actions is T|undefined).
+      actions: makeImpl().actions ?? {},
       effects: {
         // The "green" entry produces no effect by default; we splice in a
         // reentry by listening to transitions and re-sending.
@@ -304,6 +306,44 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
     // green->yellow which emits green->yellow synchronously. Both payloads
     // must reference their own outcomes, not be reordered or aliased.
     expect(events).toEqual(["red->green", "green->yellow"]);
+  });
+
+  it("reset() 'transition' payload is captured pre-reentry (FSM-B-01 / FSM-T-03)", () => {
+    // Mirror of the send() re-entrancy regression above, but with reset() as
+    // the OUTER call. reset() ran notify() (which fires subscribe listeners)
+    // before reading the live `snapshot` for the emitted 'transition' payload.
+    // A subscriber that re-entrantly send()s advances `snapshot`, so reset's
+    // emitted next pointed at the re-entry's state instead of the reset target
+    // — an event whose prev/next pair never actually happened.
+    const runtime = createRuntime(trafficLight, makeImpl());
+    runtime.send({ type: "NEXT" }); // red -> green, so reset() is a real change
+
+    const resetPayloads: string[] = [];
+    runtime.on("transition", (e) => {
+      // Record only the reset event's payload (triggerEvent type is the
+      // synthetic reset marker, not "NEXT").
+      if (e.event.type !== "NEXT") {
+        resetPayloads.push(`${e.prev.value}->${e.next.value}`);
+      }
+    });
+
+    let reenterOnce = true;
+    const unsub = runtime.subscribe((snap) => {
+      // Fires inside reset()'s notify(); re-enter with a send() the first time.
+      if (snap.value === "red" && reenterOnce) {
+        reenterOnce = false;
+        runtime.send({ type: "NEXT" }); // red -> green, inside reset()'s notify
+      }
+    });
+
+    runtime.reset();
+    unsub();
+
+    // The reset genuinely went green -> red; its emitted payload must say so,
+    // not "green->green" (aliasing the re-entry's outcome into next).
+    expect(resetPayloads).toEqual(["green->red"]);
+    // And the live snapshot reflects the re-entrant send that ran last.
+    expect(runtime.getSnapshot().value).toBe("green");
   });
 
   it("on('dispose') fires once when runtime is disposed", () => {
@@ -394,6 +434,40 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
     expect((errors[0] as Error).message).toBe("boom");
   });
 
+  it("on('error') fires for a rejecting PromiseLike (non-Promise) effect result (FSM-B-03)", async () => {
+    // A cross-realm Promise / user-defined thenable fails `instanceof Promise`,
+    // so its rejection previously bypassed the 'error' channel and became an
+    // unhandled rejection. isThenable + Promise.resolve() wrapping routes it.
+    const errors: unknown[] = [];
+    const rejectingThenable: PromiseLike<void> = {
+      // biome-ignore lint/suspicious/noThenProperty: deliberately a PromiseLike to exercise the non-Promise thenable path
+      then<TResult1 = void, TResult2 = never>(
+        _onFulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null,
+        onRejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+      ): PromiseLike<TResult1 | TResult2> {
+        return Promise.resolve().then(() =>
+          onRejected ? onRejected(new Error("thenable-boom")) : (undefined as TResult2),
+        );
+      },
+    };
+    const runtime = createRuntime(trafficLight, {
+      ...makeImpl(),
+      effects: {
+        trackTransition: () => rejectingThenable as unknown as Promise<void>,
+        logEnter: () => {},
+      },
+    });
+    runtime.on("error", (e) => {
+      errors.push(e.error);
+    });
+    runtime.send({ type: "NEXT" });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as Error).message).toBe("thenable-boom");
+  });
+
   it("on() returned unsubscribe removes the listener", () => {
     const runtime = createRuntime(trafficLight, makeImpl());
     const fn = vi.fn();
@@ -401,6 +475,58 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
     off();
     runtime.send({ type: "NEXT" });
     expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("emit() snapshots transition listeners before iterating (FAM-S-03)", () => {
+    // Family canonical (aieventjs .slice() before iterate): a listener removed
+    // by another listener DURING dispatch still fires for the current event if
+    // it was registered when the event was emitted. Iterating the live Set
+    // would skip it. Listener A unsubscribes B; B must still fire this round.
+    const runtime = createRuntime(trafficLight, makeImpl());
+    const order: string[] = [];
+    runtime.on("transition", () => {
+      order.push("A");
+      offB(); // remove B mid-dispatch
+    });
+    const offB = runtime.on("transition", () => {
+      order.push("B");
+    });
+    runtime.send({ type: "NEXT" });
+    expect(order).toEqual(["A", "B"]); // B fired despite being removed by A
+    // Next dispatch: B is now gone.
+    order.length = 0;
+    runtime.send({ type: "NEXT" });
+    expect(order).toEqual(["A"]);
+  });
+
+  it("emit() snapshot: a listener added during dispatch does not fire this round (FAM-S-03)", () => {
+    const runtime = createRuntime(trafficLight, makeImpl());
+    const order: string[] = [];
+    runtime.on("transition", () => {
+      order.push("A");
+      // Add C mid-dispatch — must NOT fire for the current event.
+      runtime.on("transition", () => order.push("C"));
+    });
+    runtime.send({ type: "NEXT" }); // red -> green
+    expect(order).toEqual(["A"]);
+    order.length = 0;
+    runtime.send({ type: "NEXT" }); // green -> yellow: A and the added C both fire
+    expect(order).toEqual(["A", "C"]);
+  });
+
+  it("subscribe() snapshots listeners before iterating (FAM-S-03)", () => {
+    // Same canonical guarantee for the subscribe() channel (notify()).
+    const runtime = createRuntime(trafficLight, makeImpl());
+    const order: string[] = [];
+    runtime.subscribe(() => {
+      order.push("A");
+      offB();
+    });
+    const offB = runtime.subscribe(() => {
+      order.push("B");
+    });
+    runtime.send({ type: "NEXT" });
+    expect(order).toEqual(["A", "B"]); // B still fires for this dispatch
   });
 
   it("on() after dispose is a no-op", () => {

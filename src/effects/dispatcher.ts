@@ -1,3 +1,4 @@
+import { isThenable } from "../fsm/evaluator.js";
 import type { Effect, EffectHandler } from "../fsm/types.js";
 
 // Lazily-built never-aborting signal for callers who don't supply one. Reused
@@ -35,7 +36,10 @@ export function runEffects<Ctx, Evt>(
     const h = handlers[eff.type];
     if (!h) continue;
     const r = h(eff, handlerArgs);
-    if (r instanceof Promise) promises.push(r);
+    // isThenable (not instanceof Promise) so cross-realm Promises and
+    // user-defined PromiseLike results are also awaitable by callers;
+    // Promise.resolve() normalises them to a real Promise (FSM-B-03).
+    if (isThenable(r)) promises.push(Promise.resolve(r));
   }
   return promises;
 }

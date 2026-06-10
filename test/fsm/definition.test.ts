@@ -149,7 +149,10 @@ describe("setup() — curried builder with inferred States", () => {
   it("works end-to-end through createRuntime", () => {
     type Ctx = { n: number };
     type Evt = { type: "INC" };
-    const machine = setup<Ctx, Evt>().defineMachine({
+    // Explicit States generic: terminal state `b: {}` under-constrains the
+    // curried setup() inference and collapses the union; the inference path
+    // itself is covered by the sibling test above. Behaviour is identical.
+    const machine = defineMachine<Ctx, Evt, "a" | "b">({
       id: "c",
       initial: "a",
       context: { n: 0 },

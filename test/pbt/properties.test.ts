@@ -1,5 +1,7 @@
 import * as fc from "fast-check";
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { defineMachine } from "../../src/fsm/definition.js";
+import type { Implementations } from "../../src/fsm/types.js";
 import {
   assertAll,
   assignDoesNotMutate,
@@ -52,5 +54,57 @@ describe("PBT generic properties — traffic-light fixture", () => {
       seed: 42,
       verbose: true,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FSM-B-02 — guardsFalseNoTransition must be non-vacuous: when a fully-guarded
+// (state,event) still transitions, the property MUST fail. The old body
+// returned `true` unconditionally, so it could only fail if step() threw.
+//
+// Witness seam: the property forces *string-ref* guards false via a proxy over
+// impl.guards, but an INLINE guard written directly in the definition is not
+// looked up there, so it keeps returning true. Such a transition is
+// fully-guarded (it carries a `guard`) yet fires — exactly the violation the
+// strengthened assertion catches and the vacuous body missed.
+// ---------------------------------------------------------------------------
+
+describe("guardsFalseNoTransition is non-vacuous (FSM-B-02)", () => {
+  type GCtx = { n: number };
+  type GEvt = { type: "GO" };
+  const goArbs = { GO: fc.constant({ type: "GO" } as GEvt) };
+
+  it("passes when a fully-guarded transition is correctly suppressed (string-ref guard)", () => {
+    const guardedMachine = defineMachine<GCtx, GEvt, "idle" | "moved">({
+      id: "guarded-string",
+      initial: "idle",
+      context: { n: 0 },
+      states: {
+        idle: { on: { GO: { target: "moved", guard: "always" } } },
+        moved: {},
+      },
+    });
+    const impl: Implementations<GCtx, GEvt> = { guards: { always: () => true } };
+    // String-ref guard → overridden false by the property → no transition.
+    guardsFalseNoTransition(guardedMachine, impl, goArbs, { numRuns: 30 });
+  });
+
+  it("FAILS when a fully-guarded transition still fires (inline guard the proxy can't block)", () => {
+    const inlineGuardMachine = defineMachine<GCtx, GEvt, "idle" | "moved">({
+      id: "guarded-inline",
+      initial: "idle",
+      context: { n: 0 },
+      states: {
+        // Inline guard returns true and is NOT in impl.guards, so the
+        // property's forced-false proxy cannot suppress it: idle -> moved fires
+        // even though the only candidate is guarded. The strengthened property
+        // must reject this; the old vacuous body accepted it (RED on HEAD).
+        idle: { on: { GO: { target: "moved", guard: () => true } } },
+        moved: {},
+      },
+    });
+    expect(() =>
+      guardsFalseNoTransition(inlineGuardMachine, {}, goArbs, { numRuns: 30 }),
+    ).toThrow();
   });
 });

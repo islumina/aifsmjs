@@ -1,5 +1,5 @@
 import { initialSnapshot } from "./definition.js";
-import { evalGuard } from "./evaluator.js";
+import { evalGuard, isThenable } from "./evaluator.js";
 import { step } from "./lifecycle.js";
 import { normalizeTransitions } from "./resolver.js";
 import { deepFreeze } from "./snapshot.js";
@@ -111,12 +111,17 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     type: K,
     payload: RuntimeEventMap<Ctx, Evt, States>[K],
   ): void {
-    for (const fn of eventListeners[type]) fn(payload);
+    // Snapshot-before-iterate (family canonical, aieventjs .slice()): a
+    // listener that subscribes/unsubscribes another during dispatch must not
+    // mutate the set being walked. One array alloc per emit, matching the
+    // family's accepted cost (FAM-S-03).
+    for (const fn of Array.from(eventListeners[type])) fn(payload);
   }
 
   function notify(committed?: Snapshot<Ctx, States>) {
     const captured = committed ?? snapshot;
-    for (const l of listeners) l(captured);
+    // Snapshot-before-iterate, as above (FAM-S-03).
+    for (const l of Array.from(listeners)) l(captured);
   }
 
   function runMiddleware(
@@ -135,8 +140,11 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
       const handler = impl.effects[eff.type];
       if (!handler) continue;
       const r = handler(eff, { context, event, signal: controller.signal });
-      if (r instanceof Promise) {
-        r.catch((err: unknown) => {
+      // isThenable (not instanceof Promise) so cross-realm Promises and
+      // user-defined PromiseLike results also have their rejections routed to
+      // the 'error' channel; Promise.resolve() normalises them (FSM-B-03).
+      if (isThenable(r)) {
+        Promise.resolve(r).catch((err: unknown) => {
           emit("error", { error: err, event });
         });
       }
@@ -170,6 +178,28 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     };
     controller.signal.addEventListener("abort", onAbort, { once: true });
     return () => controller.signal.removeEventListener("abort", onAbort);
+  }
+
+  // §3.1 Instantiate the child for `stateValue` (which must have a `sub`) and
+  // wire its parent-abort listener, committing both to childRuntime /
+  // childAbortCleanup. Throws SubMachineError(phase: "init") on failure; the
+  // caller must NOT commit the parent snapshot on throw. Single source of the
+  // init+wire sequence shared by applySubLifecycle, reset(), and bootstrap
+  // (FSM-C-01) — keeps the most failure-sensitive path in one place.
+  function initChildFor(stateValue: States): void {
+    const stateDef = def.states[stateValue];
+    const sub = stateDef?.sub;
+    /* v8 ignore next 2 — callers only invoke this after checking stateDef.sub
+       is defined; the guard documents that precondition and is never taken. */
+    if (sub === undefined) return;
+    let newChild: Runtime<unknown, { type: string }, string>;
+    try {
+      newChild = createRuntime(sub, stateDef.subImpl ?? {});
+    } catch (cause) {
+      throw new SubMachineError(stateValue as string, "init", cause);
+    }
+    childRuntime = newChild;
+    childAbortCleanup = wireChildAbort(newChild);
   }
 
   // §3.3 Re-resolve guards to find the chosen transition and determine
@@ -210,14 +240,7 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
       }
     }
     if (nextStateDef?.sub !== undefined) {
-      let newChild: Runtime<unknown, { type: string }, string>;
-      try {
-        newChild = createRuntime(nextStateDef.sub, nextStateDef.subImpl ?? {});
-      } catch (cause) {
-        throw new SubMachineError(nextValue as string, "init", cause);
-      }
-      childRuntime = newChild;
-      childAbortCleanup = wireChildAbort(newChild);
+      initChildFor(nextValue);
     }
   }
 
@@ -268,29 +291,28 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     // Init child for new initial state if it has sub (§3.5)
     const initStateDef = def.states[nextSnap.value];
     if (initStateDef?.sub) {
-      let newChild: Runtime<unknown, { type: string }, string>;
-      try {
-        newChild = createRuntime(initStateDef.sub, initStateDef.subImpl ?? {});
-      } catch (cause) {
-        /* v8 ignore next — reset() init failure: only reachable if frozen sub def somehow rejects post-bootstrap */
-        throw new SubMachineError(nextSnap.value as string, "init", cause);
-      }
-      childRuntime = newChild;
-      childAbortCleanup = wireChildAbort(newChild);
+      initChildFor(nextSnap.value);
     }
     snapshot = nextSnap;
+    // Capture the committed snapshot before notify()/emit so a subscriber that
+    // re-entrantly send()s (which advances the mutable `snapshot`) cannot
+    // corrupt this reset's payload — mirrors send()'s 0.2.0 fix (FSM-B-01).
+    const committed = nextSnap;
     const triggerEvent: Evt | ResetEvent = event ?? RESET_EVENT;
     runMiddleware(prev, triggerEvent, [], changed);
     if (changed) {
-      notify();
+      notify(committed);
       emit("transition", {
         prev,
-        next: snapshot,
+        next: committed,
         event: triggerEvent,
         effects: [],
         changed: true,
       } as RuntimeTransitionEvent<Ctx, Evt, States>);
     }
+    // Return the live snapshot (consistent with send()): under a re-entrant
+    // send() from a subscriber, this reflects the latest committed state. Only
+    // the emitted payload above is pinned to this reset's own outcome.
     return snapshot;
   }
 
@@ -391,17 +413,10 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
   };
 
   // §2 Bootstrap: if initial state has sub, instantiate child BEFORE returning.
-  // Failure throws SubMachineError(initialState, "init", cause) from createRuntime itself.
+  // Failure throws SubMachineError(initialState, "init", cause).
   const bootStateDef = def.states[snapshot.value];
   if (bootStateDef?.sub) {
-    let newChild: Runtime<unknown, { type: string }, string>;
-    try {
-      newChild = createRuntime(bootStateDef.sub, bootStateDef.subImpl ?? {});
-    } catch (cause) {
-      throw new SubMachineError(snapshot.value as string, "init", cause);
-    }
-    childRuntime = newChild;
-    childAbortCleanup = wireChildAbort(newChild);
+    initChildFor(snapshot.value);
   }
 
   return runtime;

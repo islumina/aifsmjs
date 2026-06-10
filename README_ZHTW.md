@@ -10,6 +10,8 @@
 
 隸屬 [ai\*js micro-runtime 生態系](https://github.com/islumina) ─ 另見 [aibridgejs](https://github.com/islumina/aibridgejs)（cross-context RPC）與 [aiecsjs](https://github.com/islumina/aiecsjs)（ECS）。
 
+> **狀態：0.5.5。** 核心 FSM、階層式 sub-machine、guards 與 effects、scheduler、replay、inspect、PBT helpers 全部上線。發版歷史見 [CHANGELOG.md](CHANGELOG.md)。
+
 **主要受眾**：所有處理 stateful flow 的工程師 ── 多步驟表單、checkout 流程、auth flow、教學引導步驟、文件審批狀態機、互動 app 的 scene flow，以及瀏覽器遊戲的相同模式（PixiJS / Svelte 5 / 純 Canvas / WebGL）。Library 本身**環境中立**（pure core + adapter 邊界）：browser、Node、Bun、Deno、Flutter WebView、Web Worker 全部都跑。Roadmap 段把遊戲特有的便利功能（tick hook、ECS bridge）保留為 opt-in subpath，不進 core surface。
 
 ---
@@ -288,7 +290,7 @@ const runtime = createRuntime(def, impl, {
 
 Koa-style `(ctx, next) => void` pipeline。`ctx` 是 `{ prev, next, event, effects, changed }`，全部 deep-frozen。**不能中止 transition**——`next()` 必呼叫，回傳值無語意。
 
-### `aifsmjs/replay` — Pure event log replay
+兩個須留意的邊界（1.x 內穩定，詳見 [STABILITY.md](STABILITY.md)）：跳過 `next()` **不會**被擋下，且該 event 之後的 middleware（含 `recorder` / `persist` sink）全部被靜默丟棄；middleware 同步 throw（例如 `persist` 遇非可序列化 context）會傳回 caller，但 snapshot **已 commit 卻未通知**——`notify()` 與 `on('transition')` 被跳過。請**勿**在 pipeline 內呼叫 `runtime.send()`：inner event 會先跑完整條 pipeline 才輪到 outer frame，導致 `recorder` log 順序錯置、`replay()` 發散。
 
 ```typescript
 import { replay } from "aifsmjs/replay";
@@ -487,8 +489,8 @@ aifsmjs 在幾個常見議題上做了刻意取捨，跟主流 FSM library 寫�
 
 - **Example tests**（vitest）：對每個 src module 寫 happy path + 邊界 + error message 三類。
 - **PBT smoke**：每條 generic property 跑 50 runs，作為 invariant guard，不追求 coverage。
-- **CI 強制門檻**：`@vitest/coverage-v8` 設 **100% statements / 100% lines / 100% functions / ≥90% branches**。少數 defensive invariant-guard 分支（例如 runtime determinism mismatch）標 `/* v8 ignore */` 並寫明原因。
-- **Size budget**：`scripts/check-size.mjs` 在 CI 檢查每個 subpath gzip 大小，超過預算（core ≤4.7 KB、replay ≤1.8 KB、pbt ≤5.5 KB、其他 ≤1 KB；0.3.0 為了 sub-machine sugar 提高 core / pbt 上限）即 fail。
+- **CI 強制門檻**：`@vitest/coverage-v8` 設 **100% lines / 100% functions / ≥95% statements / ≥90% branches**。少數 defensive invariant-guard 分支（例如 runtime determinism mismatch）標 `/* v8 ignore */` 並寫明原因。
+- **Size budget**：`scripts/check-size.mjs` 在 CI 檢查每個 subpath gzip 大小，量測單位是 entry 的 transitive closure（entry + 共享 chunk——build 採 code-splitting 以維持 error class 跨 subpath identity），超過預算（core ≤6.5 KB、pbt ≤8.5 KB、replay ≤3.3 KB、effects ≤1.7 KB、guards ≤1.5 KB、timer ≤1.2 KB、inspect ≤1 KB）即 fail。
 
 ### 內建的 6 條 generic properties
 

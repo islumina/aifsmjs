@@ -46,12 +46,16 @@ function validateDefinition<Ctx, Evt extends { type: string }, States extends st
     if (stateDef.sub !== undefined) {
       const sub = stateDef.sub;
       const subStates = (sub as { states?: unknown }).states;
+      const subInitial = (sub as { initial?: unknown }).initial;
       if (
         typeof sub !== "object" ||
         sub === null ||
         typeof subStates !== "object" ||
         subStates === null ||
-        typeof (sub as { initial?: unknown }).initial !== "string"
+        typeof subInitial !== "string" ||
+        // initial must name one of the sub's own states — otherwise the child
+        // boots pointing at a non-existent state and no-ops forever (FSM-S-02).
+        !Object.hasOwn(subStates as object, subInitial)
       ) {
         throw new InvalidDefinitionError(
           `state "${stateName}".sub is not a valid sub-machine definition (missing states or initial)`,

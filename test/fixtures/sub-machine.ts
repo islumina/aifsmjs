@@ -1,4 +1,4 @@
-import { defineMachine, setup } from "../../src/fsm/definition.js";
+import { defineMachine } from "../../src/fsm/definition.js";
 import type { Implementations } from "../../src/fsm/types.js";
 
 // ---------------------------------------------------------------------------
@@ -52,10 +52,16 @@ export const childImpl: Implementations<{ hits: number }, { type: "RESOLVE" } | 
 // RETRY on loading is a self-targeting external transition (A → A)
 // ---------------------------------------------------------------------------
 
-export const parentMachine = setup<
+// Explicit States generic (not the curried setup() form): one parent state
+// body — `done` — is just `{ final: true }`, which under-constrains `const
+// States` inference in setup().defineMachine and collapses the union. The
+// explicit-generic defineMachine form pins "idle" | "loading" | "done"
+// directly. Runtime behaviour is identical.
+export const parentMachine = defineMachine<
   { step: number },
-  { type: "START" } | { type: "FINISH" } | { type: "RETRY" }
->().defineMachine({
+  { type: "START" } | { type: "FINISH" } | { type: "RETRY" },
+  "idle" | "loading" | "done"
+>({
   id: "parent",
   initial: "idle",
   context: { step: 0 },

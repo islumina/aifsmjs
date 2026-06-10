@@ -18,6 +18,7 @@ const checkOnly = process.argv.includes("--check");
 const sections = [
   { path: "README.md", title: null }, // README is the lead; no extra title
   { path: "CHANGELOG.md", title: null },
+  { path: "STABILITY.md", title: "Stability tiers" },
   { path: "CONTRIBUTING.md", title: null },
   { path: "examples/README.md", title: "Examples index" },
 ];

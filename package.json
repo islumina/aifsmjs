@@ -84,7 +84,9 @@
     "test:watch": "vitest",
     "lint": "biome check src test",
     "format": "biome format --write src test",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "verify:docs": "node scripts/verify-docs.mjs",
+    "verify:dist": "node scripts/check-dist-subpaths.mjs",
     "verify:exports": "node scripts/verify-exports.mjs",
     "check:size": "node scripts/check-size.mjs",
     "build:llms": "node scripts/build-llms-full.mjs",
@@ -94,7 +96,7 @@
     "example:approval": "tsx examples/02-approval-workflow/index.ts",
     "example:checkout-funnel": "tsx examples/03-checkout-funnel/index.ts",
     "example:form-wizard": "tsx examples/04-form-wizard/index.ts",
-    "prepublishOnly": "pnpm typecheck && pnpm lint && pnpm coverage && pnpm build && pnpm verify:exports && pnpm verify:llms && pnpm check:size"
+    "prepublishOnly": "pnpm typecheck && pnpm lint && pnpm verify:docs && pnpm coverage && pnpm build && pnpm verify:dist && pnpm verify:exports && pnpm verify:llms && pnpm check:size"
   },
   "peerDependencies": {
     "fast-check": "^3.20.0 || ^4.0.0"
