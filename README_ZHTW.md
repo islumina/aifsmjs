@@ -490,7 +490,7 @@ aifsmjs 在幾個常見議題上做了刻意取捨，跟主流 FSM library 寫�
 - **Example tests**（vitest）：對每個 src module 寫 happy path + 邊界 + error message 三類。
 - **PBT smoke**：每條 generic property 跑 50 runs，作為 invariant guard，不追求 coverage。
 - **CI 強制門檻**：`@vitest/coverage-v8` 設 **100% lines / 100% functions / ≥95% statements / ≥90% branches**。少數 defensive invariant-guard 分支（例如 runtime determinism mismatch）標 `/* v8 ignore */` 並寫明原因。
-- **Size budget**：`scripts/check-size.mjs` 在 CI 檢查每個 subpath gzip 大小，超過預算（core ≤4.7 KB、replay ≤1.8 KB、pbt ≤5.5 KB、其他 ≤1 KB；0.3.0 為了 sub-machine sugar 提高 core / pbt 上限）即 fail。
+- **Size budget**：`scripts/check-size.mjs` 在 CI 檢查每個 subpath gzip 大小，量測單位是 entry 的 transitive closure（entry + 共享 chunk——build 採 code-splitting 以維持 error class 跨 subpath identity），超過預算（core ≤6.5 KB、pbt ≤8.5 KB、replay ≤3.3 KB、effects ≤1.7 KB、guards ≤1.5 KB、timer ≤1.2 KB、inspect ≤1 KB）即 fail。
 
 ### 內建的 6 條 generic properties
 
