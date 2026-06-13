@@ -13,562 +13,89 @@ The short index lives at `llms.txt` (see https://llmstxt.org/).
 
 # aifsmjs
 
-[![npm version](https://img.shields.io/npm/v/aifsmjs.svg)](https://www.npmjs.com/package/aifsmjs)
-[![CI](https://github.com/islumina/aifsmjs/actions/workflows/ci.yml/badge.svg)](https://github.com/islumina/aifsmjs/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
-[![AI Generated](https://img.shields.io/badge/AI_Generated-Claude_Code_Opus_4.7_Max-blueviolet.svg)](https://www.anthropic.com/claude-code)
-[![繁體中文](https://img.shields.io/badge/lang-繁體中文-red.svg)](README_ZHTW.md)
+Small deterministic FSM library for replayable TypeScript/JavaScript state machines. Definitions are plain data; guards/actions/effects are injected at runtime.
 
-> A small, strict FSM library for any TypeScript/JS app that needs deterministic, replayable state transitions. Lifecycle is a pure `step()` function. Chain-of-Responsibility intuition is reserved for cross-cutting concerns (observe / persist / replay), never for the transition core.
+> **Status: 0.5.6 - stable 1.0-track core.** Core FSM, guards, effects, inspect, replay, PBT helpers, scheduler, and sub-machines are live.
 
-Part of the [ai\*js micro-runtime ecosystem](https://github.com/islumina) — see also [aibridgejs](https://github.com/islumina/aibridgejs) (cross-context RPC) and [aiecsjs](https://github.com/islumina/aiecsjs) (ECS).
-
-> **Status: 0.5.6.** Core FSM, hierarchical sub-machines, guards & effects, scheduler, replay, inspect, and PBT helpers are all live. See [CHANGELOG.md](CHANGELOG.md) for release history.
-
-**Primary audience**: developers building stateful flows — multi-step forms, checkout funnels, auth flows, tutorial sequences, document-status workflows, scene flow in interactive apps, and the same patterns in browser-based games (PixiJS / Svelte 5 / plain Canvas / WebGL). The core is **environment-neutral** (pure function + adapter boundary): browser, Node, Bun, Deno, Flutter WebView, and Web Workers all work. The Roadmap section keeps gaming-specific niceties (tick hook, ECS bridge) as opt-in subpaths, not core surface.
-
----
-
-## Why aifsmjs
-
-Developers coming from C# Chain-of-Responsibility instinctively wrap FSM lifecycle in a cancellable middleware chain. In FSM territory that breaks determinism and replay. Web games in particular need replayable, serializable, worker-friendly state, so aifsmjs goes the other way:
-
-- **Lifecycle is a pure function**: `step(def, snapshot, event, impl)` runs `guards → exit → action → entry` in a fixed, uninterruptible order.
-- **CoR intuition is reserved for cross-cutting layers**: `inspect/` provides a Koa-style middleware pipeline, but it can only observe — **never alter the transition outcome**.
-- **Definition is plain data**: guards / actions / effects are referenced by string; implementations are injected only at runtime. Serializable, transferable across Web Workers, persistable to a database.
-- **PBT is first-class**: built-in `fast-check` `fc.commands` adapter plus 6 generic property tests. No comparable library currently ships this.
-
-In ecosystem terms: closer to Robot3's functional composition + XState v5's `and/or/not` guard combinators + `@xstate/store` v3's `enq.effect()` dual-track side effects. The core measures ~2.8KB ESM gzipped (v0.1.0); every opt-in subpath is independently tree-shakeable.
-
----
-
-## Quick Start
+## Install
 
 ```bash
 pnpm add aifsmjs
 ```
 
-```typescript
-import { setup, createRuntime, assign } from "aifsmjs";
+```ts
+import { assign, createRuntime, setup } from "aifsmjs";
+```
 
+## Quick Start
+
+```ts
 type Ctx = { ticks: number };
 type Evt = { type: "NEXT" };
 
-// 1. Definition is plain data; setup<Ctx, Evt>() lets States be inferred from
-//    the keys of `states`, so you don't have to repeat them.
 const trafficLight = setup<Ctx, Evt>().defineMachine({
   id: "trafficLight",
   initial: "red",
   context: { ticks: 0 },
   states: {
-    red:    { on: { NEXT: { target: "green",  actions: ["bump"] } } },
-    green:  { on: { NEXT: { target: "yellow", actions: ["bump"] } } },
-    yellow: { on: { NEXT: { target: "red",    actions: ["bump"] } } },
+    red: { on: { NEXT: { target: "green", actions: ["bump"] } } },
+    green: { on: { NEXT: { target: "yellow", actions: ["bump"] } } },
+    yellow: { on: { NEXT: { target: "red", actions: ["bump"] } } },
   },
 });
 
-// 2. Implementations are injected only at runtime
 const runtime = createRuntime(trafficLight, {
   actions: {
     bump: assign(({ context }) => ({ ticks: context.ticks + 1 })),
   },
 });
 
-// 3. Interact
 runtime.send({ type: "NEXT" });
-console.log(runtime.getSnapshot().value);   // "green"
-console.log(runtime.getSnapshot().context); // { ticks: 1 }
+console.log(runtime.getSnapshot().value); // "green"
 ```
 
-> The bare `defineMachine<Ctx, Evt, States>({...})` form is still available as an escape hatch when you need explicit control over union event types. In normal cases prefer `setup().defineMachine()`.
-
----
-
-## Mental Model
-
-```
-┌──────────────────────┐       ┌──────────────────────┐
-│  MachineDefinition   │       │   Implementations    │
-│  (plain data, JSON)  │  +    │   (guards/actions/    │
-│  • states            │       │    effects fn map)   │
-│  • on / target       │       │                      │
-│  • string refs       │       │                      │
-└──────────┬───────────┘       └──────────┬───────────┘
-           │                              │
-           └──────────────┬───────────────┘
-                          ▼
-              ┌────────────────────────┐
-              │  step(def, snap, evt,  │  ← pure function
-              │       impl)            │     fixed order, uninterruptible
-              └───────────┬────────────┘
-                          ▼
-              ┌────────────────────────┐
-              │   { snapshot,          │
-              │     effects: [...] }   │     caller decides when
-              └───────────┬────────────┘     to dispatch effects
-                          ▼
-              ┌────────────────────────┐
-              │  createRuntime(...)    │  ← thin wrapper
-              │  state holder + send   │
-              └────────────────────────┘
-```
-
-The three layers are fully decoupled: take `step()` alone for replay, take `MachineDefinition` alone for visualization, and `createRuntime` is just the convenience layer that glues them.
-
----
-
-## Capabilities / Limitations
-
-| Will do (v1)                                        | Won't do                                          |
-| --------------------------------------------------- | ------------------------------------------------- |
-| Flat states + transitions                           | Parallel state regions                            |
-| Hierarchical sugar via `state.sub` (stable since 0.4.0) | Closures embedded in definition (breaks serialize) |
-| Guards (sync only; inline async throws `InvalidDefinitionError` at `defineMachine`; runtime throws `AsyncGuardError` on thenable return) | Async guards                                      |
-| Actions (assign + enqueue effects)                  | Async API inside an action (use an effect)        |
-| Fire-and-forget effects                             | Actor invocation / spawn                          |
-| Read-only inspect middleware                        | Cancellable transition middleware                 |
-| `replay(initial, log, def, impl)` pure function     | Time-travel debugger (v2 candidate)               |
-| `fast-check` `fc.commands` adapter                   | Custom PBT framework                               |
-| String ref + runtime injection                      | Single root import for everything                 |
-| Tree-shake friendly subpath exports                  | ECS / Pixi bridges (opt-in subpath, not core)     |
-
----
-
-## Design Philosophy
-
-<details>
-<summary>Why lifecycle cannot be middleware (click to expand)</summary>
-
-UML statecharts and SCXML both mandate `exit → transition action → entry` as an atomic sequence. The moment a middleware handler can call `next()` or throw to abort, you can land in an invalid state — "entered the new state but never exited the old one" — which destroys:
-
-1. **Determinism**: the same event sequence no longer guarantees the same snapshot.
-2. **Replay**: event logs cannot reproduce the same outcome in another environment.
-3. **PBT shrinking**: fast-check's counter-example minimization presumes a deterministic machine.
-
-XState v5 removed the `predictableActionArguments` flag (actions are now always predictable) precisely because of this lesson from v4. Spring StateMachine flags its cancellable Interceptor as a "relatively deep internal feature" for the same reason.
-
-So aifsmjs splits the CoR chain instinct two ways:
-
-| Use case                       | How it is handled                                       |
-| ------------------------------ | ------------------------------------------------------- |
-| Chained guard predicates       | `and/or/not` higher-order combinators                   |
-| Multi-step action sequencing   | `actions: [...]` array, runs in order to completion     |
-| Cross-cutting (log/persist)    | `inspect/` middleware — read-only, no cancel ability    |
-
-</details>
-
-<details>
-<summary>Why the definition is plain data</summary>
-
-The moment definitions contain closures, you lose:
-
-- `JSON.stringify` round-trip for DB / localStorage persistence
-- `postMessage` transfer to a Web Worker
-- Static reachability analysis by a visualizer tool
-- Auto-generated event arbitraries from a PBT adapter
-
-aifsmjs follows the XState v5 two-phase pattern (`setup().createMachine()`): the definition uses string refs; the function map is injected at `createRuntime()`. Inline functions are still allowed but flagged as an escape hatch.
-
-</details>
-
----
-
-## Core API
-
-### `defineMachine<C, E, S>(def)`
-
-```typescript
-function defineMachine<
-  Ctx = Record<string, never>,
-  Evt extends { type: string } = { type: string },
-  States extends string = string,
->(def: MachineConfig<Ctx, Evt, States>): MachineDef<Ctx, Evt, States>;
-```
-
-Pure data builder. Validates that `initial` exists in the `states` map and returns the (normalized) definition.
-
-`context` is **optional** — omit it for stateless machines and it defaults to `{}` (the type parameter defaults to `Record<string, never>`). Existing definitions that pass `context` are unaffected.
-
-```typescript
-// No context needed — defaults to {}
-const toggle = defineMachine({
-  id: "toggle",
-  initial: "off",
-  states: {
-    off: { on: { TOGGLE: "on" } },   // string shorthand, see below
-    on:  { on: { TOGGLE: "off" } },
-  },
-});
-```
-
-**String-shorthand transitions.** A transition value may be either the full object form or a bare target-state string (à la XState). The string is normalized to `{ target }` before processing — it carries no guard or actions:
-
-```typescript
-on: { NEXT: "green" }                 // shorthand for { target: "green" }
-on: { NEXT: [{ target: "a", guard: "g" }, "b"] }  // mixes with the object form
-```
-
-### `createRuntime(def, impl, opts?)`
-
-```typescript
-function createRuntime<C, E, S>(
-  def: MachineDef<C, E, S>,
-  impl: Implementations<C, E>,
-  opts?: { middleware?: readonly Middleware<C, E, S>[] },
-): Runtime<C, E, S>;
-
-interface Runtime<C, E, S> {
-  getSnapshot(): Snapshot<C, S>;
-  send(event: E): Snapshot<C, S>;
-  subscribe(listener: (snap: Snapshot<C, S>) => void): () => void;
-  reset(event?: E): Snapshot<C, S>;
-  dispose(): void;
-  readonly disposed: boolean;
-  readonly signal: AbortSignal;
-}
-```
-
-Thin wrapper. Internally calls `step()` and dispatches effects. `dispose()` aborts the built-in `AbortController`, clears listeners, and causes subsequent `send()` / `reset()` calls to throw `RuntimeDisposedError`. `reset()` rewinds the snapshot to `initialSnapshot(def)` and notifies subscribers, but **does not run entry actions** — reset is "the runtime is reborn", not a transition.
-
-`runtime.signal` is the runtime's lifetime signal; it fires once on dispose. Every `EffectHandler` receives it via `args.signal`. External integrations (React unmount, game scene teardown) can attach `runtime.signal.addEventListener("abort", ...)` to chain their own cleanup.
-
-### `step(def, snapshot, event, impl)`
-
-```typescript
-function step<C, E, S>(
-  def: MachineDef<C, E, S>,
-  snapshot: Snapshot<C, S>,
-  event: E,
-  impl: Implementations<C, E>,
-): { snapshot: Snapshot<C, S>; effects: readonly Effect[] };
-```
-
-**Pure function**. The invariant keeper for the whole library. It never dispatches effects and never mutates the snapshot. A failing guard or unmapped event simply returns the original snapshot unchanged. It does throw on misuse (`UnknownGuardError`, `UnknownActionError`, `AsyncGuardError`) so guard/action wiring errors surface at development time rather than silently passing.
-
-### `assign(updater)`
-
-```typescript
-function assign<C, E>(
-  updater: (args: { context: C; event: E }) => Partial<C>,
-): Action<C, E>;
-```
-
-Pure context update helper. Returns a partial that is merged into the context. No side effects.
-
----
-
-## Opt-in Modules
-
-Each opt-in lives on its own subpath. If you don't import it, it is fully tree-shaken away.
-
-### `aifsmjs/guards` — Guard combinators
-
-```typescript
-import { and, or, not, stateIn } from "aifsmjs/guards";
-
-const canCheckout = and([
-  "isAuthenticated",
-  or(["isAdmin", "isOwner"]),
-  not("isBanned"),
-]);
-```
-
-`and/or/not` short-circuit over sync guards. `stateIn(...states)` is a sugar predicate: "current state is one of these".
-
-### `aifsmjs/effects` — Fire-and-forget effects
-
-```typescript
-import { type Action } from "aifsmjs";
-
-const checkout: Action<Ctx, Evt> = ({ context, enqueue }) => {
-  enqueue.effect("trackAnalytics", { event: "checkout", ctx: context });
-  // Return value becomes the new context (omit to keep current context)
-};
-```
-
-`enqueue.effect(type, payload)` queues a side-effect declaration. `step()` collects them and hands them back to the caller. Runtime dispatches after the transition; replay mode disables dispatch and keeps only the snapshot fold.
-
-### `aifsmjs/inspect` — Read-only middleware
-
-```typescript
-import { createRuntime } from "aifsmjs";
-import { logger, persist } from "aifsmjs/inspect";
-
-const runtime = createRuntime(def, impl, {
-  middleware: [
-    logger(console.log),
-    persist({ key: "machine-state", storage: localStorage }),
-  ],
-});
-```
-
-Koa-style `(ctx, next) => void` pipeline. `ctx` is `{ prev, next, event, effects, changed }`, all deep-frozen. **Cannot cancel a transition** — `next()` must be called; the return value carries no meaning.
-
-Two boundaries to respect (both stable for 1.x, detailed in [STABILITY.md](STABILITY.md)): skipping `next()` is **not** enforced and silently drops every later middleware (and the `recorder` / `persist` sinks) for that event; and a synchronous throw from a middleware (e.g. `persist` on non-serialisable context) propagates to the caller but leaves the snapshot **committed yet unannounced** — `notify()` and `on('transition')` are skipped. Do **not** call `runtime.send()` from inside the pipeline: the inner event runs its full pipeline before the outer frame finishes, so the `recorder` log is reordered and `replay()` diverges.
-
-### `aifsmjs/replay` — Pure event log replay
-
-```typescript
-import { replay } from "aifsmjs/replay";
-
-const finalSnap = replay(initialSnapshot, eventLog, def, impl);
-// Equivalent to eventLog.reduce((s, e) => step(def, s, e, impl).snapshot, initial)
-```
-
-Never dispatches effects. For PBT, time-travel debugging, and incident reproduction.
-
-### `aifsmjs/pbt` — fast-check adapter
-
-> **Install the peer**: `pnpm add -D fast-check` (^3.20.0). aifsmjs lists fast-check as an optional peer; you only need it when importing this subpath.
-
-```typescript
-import fc from "fast-check";
-import { createRuntime } from "aifsmjs";
-import { commandsFromMachine, initialModel, properties } from "aifsmjs/pbt";
-
-// Use one of the six built-in generic properties, or assertAll for all at once:
-properties.replayEqualsFold(def, impl, {
-  NEXT: fc.constant({ type: "NEXT" as const }),
-});
-
-// Or build a custom property using commandsFromMachine:
-fc.assert(
-  fc.property(
-    commandsFromMachine(def, impl, {
-      NEXT: fc.constant({ type: "NEXT" as const }),
-    }),
-    (cmds) => {
-      const real = createRuntime(def, impl, { dispatchEffects: false });
-      fc.modelRun(() => ({ model: initialModel(def), real }), cmds);
-      return true;
-    },
-  ),
-);
-```
-
-`properties.*` ships 6 generic properties (see [Testing Strategy](#testing-strategy)). `fast-check` is `peerDependenciesMeta.optional`; no install penalty if you don't use it.
-
-### `aifsmjs/timer` — Cancellable delayed callbacks
-
-```typescript
-import { after, createScheduler } from "aifsmjs/timer";
-
-// One-shot
-const handle = after(5000, () => runtime.send({ type: "TIMEOUT" }));
-handle.cancel(); // cancels if not yet fired
-
-// AbortSignal integration
-const ac = new AbortController();
-after(5000, () => runtime.send({ type: "TIMEOUT" }), { signal: ac.signal });
-ac.abort(); // also cancels
-
-// Scheduler: bundle a group of timers and cancel them together on teardown
-const sched = createScheduler();
-sched.after(1000, () => {});
-sched.after(2000, () => {});
-sched.cancelAll();
-```
-
-- Thin wrapper over `setTimeout` / `clearTimeout`, with injectable timer functions (validated by vitest fake timers)
-- AbortSignal listener registered with `{ once: true }` to avoid leaks
-- Decoupled from the FSM core: you decide when to forward a fired timer as `runtime.send(...)`
-
----
-
-## Lifecycle Invariants
-
-The fixed order inside `step()` (always, no escape hatch):
-
-```
-1. resolveTransitions(def, snapshot.value, event)
-       → candidate transitions for (state, event)
-2. evaluate guard on each candidate in declaration order
-       → first passing transition is chosen; otherwise the original snapshot is returned
-3. exit actions of the old state         (v1 is flat, no hierarchy)
-4. transition.actions[] run in declaration order
-       → each action may call enqueue.effect()
-       → each action's returned partial context is merged into the current context
-5. entry actions of the new state
-6. return { snapshot, effects } — the caller decides when to dispatch effects
-```
-
-**Contracts**:
-
-Guarantees:
-
-- Guards are sync and pure (never mutate context)
-- Actions always run to completion (no cancel mechanism)
-- Effects are declarations (type + payload), not callbacks — serializable
-- Snapshot is immutable; dev mode deep-freezes for diagnostics, prod is shallow for speed
-
-Non-goals:
-
-- No async lifecycle hook
-- Inspect middleware cannot alter the transition outcome
-
-### Sub-machine lifecycle (stable since 0.4.0)
-
-When a state declares `sub`, the per-transition ordering is:
-
-1. Parent `step()` runs: `exit actions → transition.actions → entry actions`.
-2. Old child (if any) `dispose()` — synchronous; exceptions become
-   `SubMachineError(phase: "dispose")`.
-3. New child (if next state has `sub`) instantiation — exceptions become
-   `SubMachineError(phase: "init")`.
-4. Parent snapshot commits.
-5. Middleware pipeline runs.
-6. Effects dispatch.
-7. `'transition'` event emits to `on()` / `onTransition()` subscribers.
-
-If step 2 or 3 throws, the parent snapshot is **not** committed (rollback
-to `prev`); no middleware / effects / `'transition'` runs.
-
-`runtime.dispose()` cascades to the child via `controller.signal`'s abort
-listener and an explicit `child.dispose()` call. Cascade swallows child
-exceptions to honour the never-throws dispose contract.
-
----
-
-## Lifecycle Protocol
-
-aifsmjs is the first package in a "minimal AI toolchain" family. This lifecycle protocol is meant to be reused by future packages (`aitaskjs / aibridgejs / aiaudiojs` and friends):
-
-| Verb | aifsmjs equivalent | Semantics |
-|---|---|---|
-| `createX()` | `createRuntime` / `createScheduler` / `defineMachine` / `setup` | Factory function returning the instance |
-| `dispose()` | `runtime.dispose()` / `scheduler.cancelAll()` | Release resources; idempotent; post-dispose API throws a known error |
-| `reset()` | `runtime.reset()` | Zero out state without releasing resources |
-| `on/off` | `runtime.subscribe(fn)` returning an unsubscribe fn | Subscription pattern; explicit unsubscribe |
-| `AbortSignal` | `runtime.signal` / `after(_, _, { signal })` | Cancellation channel for any long-running / async work |
-| Pure core | `step()` | No I/O, serializable, replayable |
-| Explicit errors | `RuntimeDisposedError` / `UnknownGuardError` / `UnknownActionError` / `InvalidDefinitionError` | Named error classes, never bare `throw "string"` |
-
-When future ai\*js packages ask "should this have a dispose?" or "where does the signal plug in?", this table is the baseline.
-
----
-
-## Design choices: divergence from common patterns
-
-aifsmjs ships a few opinionated calls that look different from the typical FSM library. The rationale below explains what we chose and why, so readers coming from XState, statecharts, or general event-emitter libraries can skip the source dive.
-
-- **`send()` is synchronous, returning `Snapshot` instead of `Promise<Snapshot>`.** The pure `step()` core is sync by construction so that `replay(initial, log)` and PBT shrinking remain trivial. Effect handlers may still be async; the runtime fires them and forwards async rejections to the `'error'` event channel. If you need to await effect completion, build a small wrapper that returns `Promise.all` over your handler results.
-- **Guards and reducers are sync.** A non-deterministic guard would break the PBT determinism property (#1 in the generic suite). Move async predicates into events: send `FETCH_REQUEST`, then later `FETCH_DONE` with the resolved value as payload.
-- **Effects are descriptors, not inline callbacks.** Actions enqueue `{ type, payload }` via `enqueue.effect(...)`; the runtime collects them and the dispatcher invokes user handlers. This keeps machine definitions serializable (JSON round-trippable when no inline functions are used), enables `replay()` to fold an event log into the same snapshot, and lets `inspect/persist` middleware capture effects for audit logs.
-- **Two factory paths coexist.** `setup<Ctx, Evt>().defineMachine(...)` is the type-friendly form (States inferred from `keyof states`). `createMachine(def, impl, opts?)` is the spec-style single-factory shortcut from the ai*js ecosystem review. Plain `defineMachine<Ctx, Evt, States>(def)` remains for explicit generic control. Pick whichever reads best at the call site.
-- **Transitions accept a string shorthand.** `on: { EVENT: "targetState" }` is sugar for `on: { EVENT: { target: "targetState" } }`, normalized in the resolver before any guard/action processing. The shorthand has no guard or actions; reach for the object form when you need them. It composes inside the array form too, so guard-fallthrough lists can mix `{ target, guard }` objects with bare target strings. The full object form is unchanged — this is purely additive.
-- **`context` is optional.** Omit it for stateless machines and it defaults to `{}` (`Ctx` defaults to `Record<string, never>`). Definitions that already pass `context` keep their inferred type and behave identically.
-- **`subscribe(listener)` and `on(type, fn, { signal, once })` both exist.** The typed `on()` matches the platform `EventTarget` semantics (signal + once) and emits `'transition'`, `'error'`, `'dispose'`. The older `subscribe()` keeps the React `useSyncExternalStore` shape — pass it directly. They are not exclusive.
-
----
-
-## AI-Agent Reading Guide
-
-> This section is for LLMs and code-search agents. Invariants, types, and misuse patterns are concentrated here.
-
-### Serializable fields
-
-The following are plain data, safe to `JSON.stringify` round-trip:
-
-- The entire `MachineDef` (provided no inline functions are used)
-- The entire `Snapshot` (provided `context` is plain data)
-- The entire `Effect` (`{ type: string; payload?: unknown }`)
-
-The following are **not serializable** and will break PBT/replay:
-
-- Every function inside `Implementations`
-- Middleware closures
-
-### Invariants (do not violate)
-
-1. `step()` is pure: identical `(def, snapshot, event, impl)` always returns identical `{ snapshot, effects }`.
-2. Snapshots are frozen: in dev mode any mutation throws immediately.
-3. Guards never mutate context: violators are caught by PBT property #2.
-4. Effects are always fire-and-forget: the runtime never waits for an effect before updating the snapshot.
-5. `dispose()` is idempotent; post-dispose `send()` / `reset()` throws `RuntimeDisposedError`.
-6. `runtime.signal.aborted` is `true` for the rest of time once disposed; the effect handler's `signal` is the same one.
-7. `reset()` only resets the snapshot and notifies listeners — it does **not** run entry actions. Listeners are notified only when `prev.value !== initial.value` (parity with `send()`). Middleware always observes the call (possibly with `changed: false`).
-8. `MiddlewareContext.event` is typed `Evt | ResetEvent`; a `reset()` without an event injects the `RESET_EVENT_TYPE` sentinel (`"@@aifsmjs/RESET"`).
-
-### Common misuses
-
-| Anti-pattern                                              | Correct form                                                  |
-| --------------------------------------------------------- | ------------------------------------------------------------- |
-| Calling `fetch()` (or any async API) inside a guard        | Rewrite as events: send `FETCH_REQUEST`, then `FETCH_DONE`    |
-| `setTimeout`-and-mutate inside an action                   | Use `enqueue.effect("delayedThing", ...)`                     |
-| Using middleware to alter the next state                   | Not possible — middleware is read-only. Rewrite as a guard.   |
-| Inline functions inside a definition (works but breaks serialize) | Pull out as string refs, inject at `createRuntime`            |
-
-### Machine-readable schema
-
-A JSON schema for `MachineDef` will ship at `dist/schema/machine.schema.json`. Not yet available in v1; types live in [src/fsm/types.ts](src/fsm/types.ts) for agents to derive from.
-
----
-
-## Testing Strategy
-
-Example-first, PBT-augmented. Lesson from jssm: "3000+ tests / 100% coverage" turns out to have < 12% coverage from stochastic tests — the rest is example specs.
-
-- **Example tests** (vitest): for every src module, write happy path + edge + error-message triplets.
-- **PBT smoke**: each generic property runs 50 iterations as an invariant guard, not as a coverage source.
-- **CI-enforced thresholds**: `@vitest/coverage-v8` is wired to **100% lines / 100% functions / ≥95% statements / ≥90% branches**. The few defensive invariant-guard branches (e.g. runtime determinism mismatch) carry `/* v8 ignore */` annotations with rationale.
-- **Size budget**: `scripts/check-size.mjs` enforces per-subpath gzip caps in CI, measured as each entry's transitive closure (entry + shared chunks — the build code-splits so error classes keep cross-subpath identity) — core ≤6.5 KB, pbt ≤8.5 KB (transitively imports `createRuntime`), replay ≤3.3 KB, effects ≤1.7 KB, guards ≤1.5 KB, timer ≤1.2 KB, inspect ≤1 KB. Exceeding any cap fails the build.
-
-### The 6 built-in generic properties
-
-| #   | Property                          | One-liner                                                |
-| --- | --------------------------------- | -------------------------------------------------------- |
-| 1   | snapshotAlwaysFrozen              | After any event sequence, the snapshot remains frozen    |
-| 2   | unknownEventNoOp                  | Undeclared events do not change the snapshot             |
-| 3   | reachableStatesSubsetDeclared     | Every reachable state belongs to `def.states`            |
-| 4   | replayEqualsFold                  | `replay(init, log)` equals `events.reduce(step)`         |
-| 5   | guardsFalseNoTransition           | When all guards fail, the state is unchanged              |
-| 6   | assignDoesNotMutate               | `assign` never modifies the previous context             |
-
----
-
-## Comparison
-
-|                            | aifsmjs        | XState v5         | Robot3            | @xstate/store     | Zag.js            |
-| -------------------------- | -------------- | ----------------- | ----------------- | ----------------- | ----------------- |
-| Core size (gzip)           | ~2.8KB         | ~15KB             | ~1KB              | < 1KB             | per-component     |
-| Hierarchical states         | Sugar (0.3.0)  | Yes               | No                | N/A               | Yes               |
-| Async invoke / actor        | No             | Yes               | No                | N/A               | No                |
-| Guard combinators           | and/or/not     | and/or/not        | No                | N/A               | No                |
-| Effects dual-track          | enqueue        | enqueueActions    | reduce/action     | enq.effect()      | array of names    |
-| Inspect / observe           | read-only      | inspect API       | No                | proposed          | watch ctx         |
-| Serializable definition     | Yes            | Yes               | Partial           | Partial           | Yes               |
-| fast-check adapter          | built-in       | No                | No                | No                | No                |
-| Tree-shake subpath imports  | Yes            | Partial           | Yes               | Yes               | Yes               |
-
----
-
-## Roadmap
-
-| Version | Scope                                                              |
-| ------- | ------------------------------------------------------------------ |
-| v0.1    | core + guards + effects + inspect + replay + pbt (this release)    |
-| v0.2    | Async-guard detection, coverage tuning, llms-full.txt verify gate  |
-| v0.3    | Hierarchical sugar via `state.sub` (experimental)                  |
-| v0.4    | Sub-machine API promoted to stable; dependency-reduction cycle     |
-| v0.5    | `aifsmjs-bridge-bitecs` / `aifsmjs-bridge-pixi` (separate sub-packages) |
-| v1.0    | API freeze and stability guarantee                                  |
-
-**Out of scope (v1)**:
-
-- **Parallel state regions** (out of scope for v1)
-- **Actor invocation / spawn** (out of scope for v1)
-- **Tick / game-loop hook** (out of scope for v1)
-- **ECS / Pixi bridges** (out of scope for v1)
-
-**Future candidate**: `historyState` — remember last active sub-state on
-re-entry. Workaround today: snapshot via `onTransition` and restore
-manually.
-
----
+Prefer `setup<Ctx, Evt>().defineMachine()` for state inference. Use bare `defineMachine<Ctx, Evt, States>()` only when you need explicit generic control.
+
+## Public Surface
+
+| Import | Purpose |
+| --- | --- |
+| `aifsmjs` | `setup`, `defineMachine`, `createRuntime`, `createMachine`, `step`, `assign`, snapshots, runtime/errors/types. |
+| `aifsmjs/guards` | `and`, `or`, `not`, `stateIn`. Guards must be synchronous. |
+| `aifsmjs/effects` | `enqueue.effect()` descriptors and `runEffects()`. |
+| `aifsmjs/inspect` | Read-only middleware helpers: `logger`, `persist`, `recorder`. |
+| `aifsmjs/replay` | Pure event-log replay. |
+| `aifsmjs/pbt` | fast-check property helpers. |
+| `aifsmjs/timer` | `after()` and `createScheduler()`. |
+
+## Lifecycle Rules
+
+- `step(def, snapshot, event, impl)` is pure and returns `{ snapshot, effects, changed }`.
+- `createRuntime()` owns mutable runtime state, dispatches effects after commit, and emits transition/error/dispose events.
+- Guards and reducers are sync. Thenable guards throw `AsyncGuardError`.
+- Effects are fire-and-forget descriptors. Async rejection is routed to the runtime `"error"` channel.
+- `reset()` rewinds the snapshot and notifies listeners, but does not run entry actions.
+- `dispose()` is idempotent; post-dispose `send()`/`reset()` throw `RuntimeDisposedError`.
+
+## Sharp Edges
+
+- Middleware and synchronous effect throws happen after snapshot commit. A throw can leave the committed snapshot visible without later notification.
+- Sub-machine replacement can roll back on init failure, but dispose failure has already torn down the old child.
+- `subRuntime()` can return a disposed child handle if external code disposed it; it is recreated only after the parent exits and re-enters the sub state.
+- `setup().defineMachine()` uses `NoInfer` so states infer from `keyof states`; keep regression tests for exact optional property configurations.
+- Do not perform async I/O inside guards or actions. Send events from effects instead.
+
+## AI Context
+
+- Short index: [`llms.txt`](llms.txt)
+- Full generated context: [`llms-full.txt`](llms-full.txt)
+- Stability contract: [`STABILITY.md`](STABILITY.md)
+- Current review backlog: [`REVIEW.md`](REVIEW.md)
+- Release history: [`CHANGELOG.md`](CHANGELOG.md)
 
 ## License
 
-[MIT](LICENSE)
+MIT
 
 ---
 
@@ -576,377 +103,26 @@ manually.
 
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to aifsmjs are summarized here.
 
 ## [Unreleased]
 
+- Documentation-only slimming pass across README, stability notes, review backlog, and LLM context.
+- Known follow-ups: preserve `setup().defineMachine()` inference tests and decide whether post-commit synchronous middleware/effect throws need an opt-in safer mode.
+
 ## [0.5.6] - 2026-06-10
 
-### Fixed
-
-- **Guard combinators route through the async-guard safety net** — `and()` / `or()` / `not()` now pass each resolved guard's return value through the same `isThenable` check as top-level guards, throwing `AsyncGuardError` instead of coercing a pending thenable to `true`/`false`. The 0.2.0 async-guard protection was bypassable through any combinator. (Review wave 2026-06-10, FSM-S-01.)
-- **`reset()` captures the committed snapshot before notifying** (mirroring the 0.2.0 `send()` fix), so a listener that re-enters `send()` during reset can no longer make the `'transition'` payload report a state pair that never occurred. (FSM-B-01.)
-- **Scheduler `pending` registry no longer leaks** on any of its three escape paths: signal-abort cancellation, scheduling on an already-aborted signal, and a custom scheduler that fires synchronously during `after()`. Signal handling is owned by the scheduler layer now; fire/cancel/abort all remove the tracked handle and detach the abort listener. (FSM-R-01.)
-- PBT property #5 `guardsFalseNoTransition` actually asserts `changed === false` (its body was vacuous — it returned `true` unconditionally); the other five generic properties were audited and are non-vacuous. (FSM-B-02.)
-- Hierarchical `sub.initial` is validated as a member of `sub.states` at definition time. (FSM-S-02.)
-- Effect results are detected with `isThenable` instead of `instanceof Promise` at both dispatch sites, so cross-realm / userland PromiseLike values are awaited and error-routed correctly. (FSM-B-03.)
-- `emit()` / `notify()` snapshot their listener sets before iterating (family-canonical), pinning unsubscribe/re-subscribe-during-dispatch semantics. (FAM-S-03.)
-
-### Changed
-
-- **Code splitting enabled (`tsup splitting: true`)** — the published 0.5.x dist inlined a private copy of the shared runtime (including every error class) into each subpath bundle, so an error raised through `aifsmjs/guards` failed `instanceof` checks against the root export. Shared chunks restore cross-subpath class identity; total dist JS shrank 50.7 KB → 31.1 KB. `check:size` now measures each entry's transitive chunk closure, with budgets recalibrated and the README size-budget bullet updated to match.
-- Triplicated child init/wire logic extracted into a single `initChildFor()` helper (behaviour-preserving).
-- Supply-chain and release hardening: CI/publish actions SHA-pinned, npm CLI pinned (`11.16.0`), `permissions: contents: read` on CI, job timeouts, `npm publish --ignore-scripts`, manual dispatch defaults to dry-run, new `verify:docs` banner gate, two-stage typecheck (tests are now type-checked), `llms-full.txt` embeds `STABILITY.md`, and a cross-subpath dist smoke (`verify:dist`).
-
-### Docs
-
-- README coverage claim corrected to the enforced thresholds (95% statements); middleware sync-throw commit/notify boundary and `next()`-skip behaviour documented (with characterisation tests); README status banner added (EN + ZHTW).
-
-## [0.5.5] - 2026-06-08
-
-### Changed
-
-- Project home migrated to the [`islumina`](https://github.com/islumina) GitHub org; the package is now published from there via npm trusted publisher (OIDC + SLSA provenance). Family-wide version alignment at `0.5.5` — no runtime or API changes.
-
-## [0.5.3] - 2026-06-05
-
-### Added
-
-- **String-shorthand transitions and optional `context` (both additive, non-breaking).** Transitions now accept a bare target string — `on: { EVENT: "target" }` is sugar for `{ target: "target" }`, normalized in the resolver and composable inside guard-fallthrough arrays; and `context` is now optional in `defineMachine` / `setup().defineMachine`, defaulting to `{}` (`Ctx` defaults to `Record<string, never>`). Existing object-form transitions and explicit-`context` definitions are unaffected. (`src/fsm/types.ts`, `src/fsm/resolver.ts`, `src/fsm/definition.ts`, `src/fsm/lifecycle.ts`, `src/fsm/runtime.ts`)
-
-## [0.5.2] - 2026-06-05
-
-### Docs
-
-- Review-driven documentation fixes (`README.md`, `README_ZHTW.md`, `llms-full.txt`): clarity and accuracy from a cross-package code review. No runtime or API change; `dist` byte-identical to 0.5.1.
-
-## [0.5.1] - 2026-06-02
-
-### Fixed
-
-- **Memory: `after()` and `createScheduler().after()` accumulated dead abort
-  listeners on a reused `AbortSignal`.** `{ once: true }` only removes the
-  listener when the signal fires — not when the timer fires normally or
-  `cancel()` is called. Scheduling many timers on one long-lived signal
-  therefore accumulated dead `"abort"` closures. The fix explicitly calls
-  `signal.removeEventListener("abort", cancel)` inside the fire callback (so
-  a fired timer detaches immediately) and at the end of `cancel()` (so a
-  cancelled timer also detaches). Same class of leak as the [0.1.2] and
-  [0.3.1] abort-listener fixes; the timer subpath was the remaining gap.
-  Four regression tests added to `test/timer/scheduler.test.ts` covering
-  both `after()` and `createScheduler().after()`, fire and cancel paths.
-  (`src/timer/scheduler.ts`)
-
-### Changed
-
-- **`fast-check` peer dependency range extended to `^3.20.0 || ^4.0.0`.**
-  The ai\*js family standard is fast-check v4.8; consumers who have already
-  upgraded to v4 no longer need to suppress a peer warning. The devDependency
-  is pinned to `^4.8.0` so CI runs against v4. Consumers who remain on v3
-  are fully unaffected — the `||` range keeps v3 satisfied. The `aifsmjs/pbt`
-  subpath is the only entry point that imports fast-check; the core and all
-  other subpaths are tree-shake-free of it.
-
-## [0.4.1] — 2026-05-29
-
-### Changed
-
-- **`STABILITY.md` is now repo-only** — removed from the npm `files`
-  allowlist, aligning with the majority of the ai*js family (5 of 7
-  packages already ship the stability contract repo-only). The file stays
-  in the repository and remains visible on GitHub and the rendered npm
-  package page; it is simply no longer bundled inside the published
-  tarball. Packaging consistency patch: **no runtime API change, no
-  signature change**; the built bundles (`dist/`) are byte-identical to
-  0.4.0 (core gzip 4,387 B).
-
-## [0.4.0] — 2026-05-29
-
-### Changed
-
-- **Sub-machine API promoted experimental → stable.** The hierarchical
-  sub-machine surface shipped in 0.3.0 — `StateDef.sub`, `StateDef.subImpl`,
-  `Runtime.subRuntime()`, `SubMachineError`, and the `SubMachineDef` type
-  alias — is now stable. Signatures and runtime semantics, including the
-  init-failure quarantine behaviour, are frozen for the 1.x line; the
-  boundaries documented in `STABILITY.md` are intentional design trade-offs,
-  not instability. **No signature changed from 0.3.x.**
-
-### Dependency reduction
-
-- Part of the ai*js v0.4.0 dependency-reduction cycle. `fast-check` remains
-  an **optional** peer dependency isolated to the `aifsmjs/pbt` subpath. A
-  fresh build confirms the core entry and the five non-pbt subpaths
-  (`guards` / `effects` / `inspect` / `replay` / `timer`) are tree-shake-free
-  of `fast-check` (only `dist/pbt/index.js` references it). `pnpm audit`
-  reports zero advisories. No `devDependency` changes.
-
-### Compatibility
-
-This release adds **no runtime API** and changes **no signature**. The core
-bundle is byte-identical to 0.3.1 (gzip 4,387 B); existing 0.3.x consumer
-code is unaffected. The only substantive change is the documented stability
-tier of the sub-machine API.
-
-## [0.3.1] — 2026-05-29
-
-### Fixed
-
-- **Memory: `on(type, fn, { once: true, signal })` left the abort listener
-  attached after the once-handler fired.** The `once` wrapper removed itself
-  from the listener set but did not detach the `AbortSignal` listener or drop
-  its entry from the internal cleanup set, so the closure lingered on the
-  external signal until the signal aborted or `dispose()` ran. With a
-  long-lived signal and repeated once+signal registration, dead listeners
-  accumulated. `on()` now routes the once-wrapper, the abort handler, and the
-  returned unsubscribe through a single `cleanup()` that always detaches the
-  abort listener. `runtime.onTransition(fn, { once, signal })` inherits the
-  fix (it delegates to `on`). Same class of leak as the [0.1.2] abort-listener
-  fix; `once` + `signal` together was the remaining gap. Present since 0.1.2.
-
-This release is **non-breaking**. No API surface change; `once`-only,
-`signal`-only, and no-option callers are byte-for-byte unaffected at runtime.
-Core gzip 4,393 B → 4,387 B (the shared `cleanup` closure deduplicates).
-
-## [0.3.0] — 2026-05-29
-
-### Added
-
-- **Hierarchical / sub-machine sugar** (experimental). `StateDef` accepts
-  two new optional fields: `sub` (a child `SubMachineDef`) and `subImpl`
-  (the child's `Implementations`). When the runtime enters a state with
-  `sub`, a child `Runtime` is lazily instantiated; when it exits, the child
-  is disposed. Access via `runtime.subRuntime()`. See `STABILITY.md` for
-  the experimental contract.
-  - New error: `SubMachineError` (`{ parentState, phase, cause }`) thrown
-    by `send()` / `reset()` on child init / dispose failure. `dispose()`
-    cascade swallows child dispose exceptions (idempotent + never-throws
-    contract).
-  - New type alias: `SubMachineDef<SubCtx, SubEvt, SubStates>`.
-- **`runtime.onTransition(handler, opts?)`** — semantic sugar over
-  `runtime.on('transition', handler, opts)`. One-line delegation; shares
-  the same listener Set, so registration order across both APIs determines
-  invocation order. Returned unsubscribe identical to `on('transition', ...)`.
-
-### Stability
-
-- New file: `STABILITY.md`. Documents the three tiers: **stable**
-  (everything shipped 0.1.0–0.2.1), **experimental** (`sub`, `subImpl`,
-  `subRuntime`, `SubMachineError`, `SubMachineDef`), **draft**
-  (`historyState`, v0.4 candidate).
-
-### Changed (positioning)
-
-- **README "Capabilities / Limitations" table**: "Hierarchical / compound
-  states" moved out of the "Won't do" column. Added on the "Will do" side
-  as "Hierarchical sugar via `state.sub` (experimental since 0.3.0)".
-- **README Lifecycle Invariants**: documented the sub-machine ordering —
-  parent `step()` lifecycle (exit / actions / entry) runs first, then
-  child dispose → child init → snapshot commit → middleware → effects →
-  `transition` emit.
-
-### Build & tooling
-
-- **`scripts/check-size.mjs`**: core gzip budget raised 3,700 → 4,700 B
-  to absorb sub-machine lifecycle, `SubMachineError`, and `onTransition`
-  sugar (measured at 4,465 B). `pbt` budget raised 4,600 → 5,500 B because
-  `pbt/properties.ts` imports `createRuntime` from `runtime.ts`; the new
-  sub-machine code is pulled in transitively (measured at 5,228 B).
-
-### Compatibility
-
-This release is **non-breaking** for v0.2.1 callers who do not opt into
-the new sub-machine fields. All existing API signatures, error types, and
-runtime behaviour are byte-identical.
-
-## [0.2.1] — 2026-05-28
-
-### Security
-
-- **Resolve two Dependabot moderate advisories** on the transitive dev-only graph by upgrading `vitest` 2.1.0 → 4.1.7 and `@vitest/coverage-v8` 2.1.9 → 4.1.7. Adds `vite` 8.0.14 as a direct devDependency to satisfy vitest 4's peer range (`^6 || ^7 || ^8`). These are dev-only — runtime surface unchanged. Same fix as `aibridgejs` 0.1.2.
-  - [GHSA-67mh-4wv8-2f99](https://github.com/advisories/GHSA-67mh-4wv8-2f99) `esbuild <=0.24.2` CORS development server data leak (fixed in 0.25.0).
-  - [GHSA-4w7w-66w2-5vf9](https://github.com/advisories/GHSA-4w7w-66w2-5vf9) `vite <=6.4.1` path traversal in optimized deps `.map` handling (fixed in 6.4.2 / 7.3.2 / 8.0.5).
-
-### Changed
-
-- **Coverage threshold relaxed**: statements 100 → 95 in [vitest.config.ts](vitest.config.ts). Vitest 4 with v8 coverage scores defensive race-recovery if-guards (e.g. `if (!current) return;` in timeout/abort handlers) as separate statements that are not deterministically reachable. Lines and functions stay at 100%; branches stays at 90%.
-- **`prepublishOnly` now includes `verify:llms`** so llms-full.txt drift is caught at publish time as well as CI.
-- **README opening unified across the ai*js family**: five-badge shields row, one-line tagline as blockquote, ecosystem footer.
-
-Runtime surface unchanged. Production bundles are byte-identical to 0.2.0.
-
-## [0.2.0] — 2026-05-28
-
-### Added
-
-- **Async-guard detection**: `evalGuard` and `defineMachine`'s validation pass now throw on async guards. TypeScript already prevents the typed case, but a JS caller or a cast could slip an async guard through and silently pass every check (a thenable is truthy). The new check fails loudly:
-  - **Definition time** (inline `async` guard) → `InvalidDefinitionError` from `defineMachine`'s `validateDefinition`.
-  - **Runtime** (string-ref or cast guard whose return value is thenable) → `AsyncGuardError` from `evalGuard`. The thenable check uses `typeof x?.then === "function"`, so cross-realm Promises (iframe / worker / vm) and user-defined PromiseLike values are also caught — not just same-realm `instanceof Promise`.
-  - New exports from `aifsmjs`: `AsyncGuardError`, `isAsyncGuardFn`.
-  - README's "Capabilities / Limitations" table updated to reflect the new runtime guarantee.
-
-### Fixed (correctness)
-
-- **`send()` transition payload AND `notify()` listeners are captured pre-reentry** ([src/fsm/runtime.ts](src/fsm/runtime.ts)): the `next` field of the emitted `'transition'` event, the effect dispatch context, and the snapshot delivered to `subscribe()` listeners are all now read from a captured local `committed` snapshot rather than the outer mutable `snapshot` variable. Closes a race where a reentrant `send()` inside an effect handler or subscriber would race ahead and the outer payload / later subscribers in the same notify pass would end up pointing at the reentry's snapshot.
-- **`evalGuard` falls back to `<inline>` for anonymous-arrow guards** ([src/fsm/evaluator.ts](src/fsm/evaluator.ts)): switched `??` to `||` so an empty `Function.prototype.name` falls back instead of producing `guard "" must be sync;`.
-- **README + README_ZHTW + llms-full.txt** now describe the two error paths separately (`InvalidDefinitionError` at definition time vs `AsyncGuardError` at runtime) instead of conflating them.
-
-### Changed (positioning + meta)
-
-- **`package.json#description`** rewritten from «for web game development» to lead with the broader use case set (multi-step forms, checkout funnels, auth flows, tutorials, scene flow). The README's "Primary audience" paragraph already moved away from game-only framing in v0.2.0; the package metadata now matches.
-
-### Build & tooling
-
-- **`verify:llms` is now build-agnostic** ([scripts/build-llms-full.mjs](scripts/build-llms-full.mjs)): the script accepts `--check` which builds the file in memory and compares against disk, exit 1 on diff. The previous form used `git diff --exit-code -- llms-full.txt` after running the build, which failed any time the working tree had uncommitted changes (not just llms-full.txt drift). The new form works identically pre-commit and in CI.
-- **Per-subpath gzip budgets raised** ([scripts/check-size.mjs](scripts/check-size.mjs)): core 3500 → 3700 B and replay 1600 → 1800 B to absorb the AsyncGuardError + thenable detection cost; pbt 4500 → 4600 B for a small symbol additions. All entries still tracked at ≥95% headroom.
-
-### Added (examples)
-
-- `examples/03-checkout-funnel` — e-commerce checkout funnel with guarded staging, payment / analytics effects, and a `replay()` round-trip. Demonstrates that aifsmjs models classic web UX flows with no canvas / game loop involvement.
-- `examples/04-form-wizard` — multi-step form wizard with back / next / jump-to-step navigation, per-step validation, and draft persistence via the `persist` middleware.
-
-### Changed (positioning)
-
-- `README.md` and `README_ZHTW.md`'s "Primary audience" paragraph now leads with stateful web flows (multi-step forms, checkout funnels, auth flows, tutorials, document workflows) and frames games as one application of the same pattern. The core remains environment-neutral; the only opt-in dependency is `fast-check` for the `aifsmjs/pbt` PBT adapter.
-
-### Compatibility
-
-This release is **non-breaking at runtime** for users who already wrote sync guards. Async guards previously slipped through and silently passed; they now throw. If you relied on this accidental behaviour, move the async work into an effect (`enq.effect(...)`) and dispatch a follow-up event when the work completes — the pattern is documented in the README's "Common pitfalls" table.
-
-## [0.1.2] — 2026-05-28
-
-### Fixed
-
-- **Memory**: `runtime.on(type, fn, { signal })` previously left an
-  abort listener attached to the external `AbortSignal` after
-  `runtime.dispose()`. The listener (and its closure over the user's
-  callback) was retained until the signal eventually fired or was
-  garbage-collected. `dispose()` now removes each abort listener from
-  the signal it was attached to, and the unsubscribe function returned
-  by `on()` does the same on manual unsubscribe.
-
-### Internal
-
-- Narrowed `dispatchEffects` event parameter from `Evt | ResetEvent`
-  to `Evt`; the function is only reached via `send()`. Removed the
-  corresponding `as Evt` cast.
-- Removed a redundant `snapshot.context as Ctx` cast in `step()`.
-
-No public API changes; existing 0.1.1 callers run unchanged. Core gzip
-3296 B → 3401 B (97% of 3500 B budget).
-
-## [0.1.1] — 2026-05-28
-
-### Changed
-
-- **Release pipeline**: switched to npm OIDC trusted publisher. Releases
-  now ship with provenance attestation generated from the GitHub Action
-  via `id-token: write` + `--provenance`; no long-lived `NPM_TOKEN`
-  needed. The `Publish to npm` workflow is unchanged from v0.1.0; see
-  CONTRIBUTING for the `pnpm version patch && git push --follow-tags`
-  flow.
-
-No code changes vs v0.1.0; runtime behaviour, API surface, and bundle
-sizes are identical (core gzip 3.30 KB / 3.5 KB budget).
-
-## [0.1.0] — 2026-05-28
-
-Initial public release.
-
-### Added
-
-- **fsm/** (source folder, internal) — `defineMachine`, `setup<Ctx, Evt>()`
-  curried builder for inferred States, `createRuntime`, `step()` pure
-  function with fixed `guards → exit → action → entry` lifecycle order.
-  Runtime exposes `dispose()`, `reset(event?)`, `disposed`, `signal`
-  (internal `AbortController` lifetime) — see the Lifecycle Protocol section
-  of README. `RuntimeDisposedError` thrown on post-dispose calls. Snapshot
-  is frozen (deep-frozen in dev). Implementations injected at runtime via
-  string refs.
-- **`aifsmjs/guards`** — `and / or / not / stateIn` higher-order combinators
-  with short-circuit evaluation. Both string-ref and inline `Guard` supported.
-- **`aifsmjs/effects`** — `Enqueuer` API (`enqueue.effect(type, payload?)`)
-  and a standalone `runEffects()` dispatcher. Effects are descriptors, not
-  callbacks, so they remain serializable. `EffectHandler` receives the
-  runtime's `AbortSignal` in `args.signal`. `runEffects()` accepts
-  `args.signal` as optional — standalone callers may omit it and the
-  dispatcher supplies a never-aborting placeholder.
-- **`Runtime.reset()`** — listeners notified only when `prev.value !==
-  initial.value` (parity with `send()`); middleware always observes the
-  call regardless. The triggering event is exposed on
-  `MiddlewareContext.event` as `Evt | ResetEvent`. The sentinel
-  `RESET_EVENT_TYPE` (`"@@aifsmjs/RESET"`) is exported for discrimination.
-- **`aifsmjs/inspect`** — Koa-style read-only middleware pipeline. Built-in
-  `logger`, `persist`, and `recorder` middlewares. Middleware cannot alter a
-  transition outcome.
-- **`aifsmjs/replay`** — Pure event-log fold via `step()`. Never dispatches
-  effects; suitable for PBT, time travel, and incident reproduction.
-- **`aifsmjs/pbt`** — `fast-check` `fc.commands` adapter
-  (`commandsFromMachine`) plus six generic property tests
-  (`snapshotAlwaysFrozen`, `unknownEventNoOp`, `reachableStatesSubsetDeclared`,
-  `replayEqualsFold`, `guardsFalseNoTransition`, `assignDoesNotMutate`) and an
-  `assertAll` convenience runner. `fast-check` listed as optional peer.
-- **`aifsmjs/timer`** — `after(ms, fn, { signal })` returning a cancellable
-  handle, plus `createScheduler()` for bundled cancellation. `AbortSignal`
-  listeners registered with `{ once: true }` to avoid leaks.
-- TypeScript build with `strict + noUncheckedIndexedAccess +
-  exactOptionalPropertyTypes`; dual ESM/CJS output via tsup.
-- Bilingual README (Traditional Chinese canonical + English mirror) with an
-  AI-Agent Reading Guide section, Lifecycle Invariants contract, and
-  comparison table against XState v5 / Robot3 / @xstate/store / Zag.js.
-- 94 example-based tests (vitest) plus PBT smoke runs against a traffic-light
-  fixture.
-
-### API additions for ai*js ecosystem alignment
-
-- **`createMachine(def, impl, opts?)`** — single-factory convenience that
-  composes `defineMachine` + `createRuntime`. Spec-style entry point from
-  the ai*js micro-runtime review; the curried `setup().defineMachine` form
-  remains for States inference, and explicit `defineMachine<Ctx,Evt,States>`
-  remains as an escape hatch.
-- **`runtime.snapshot()`** — alias for `runtime.getSnapshot()`; documented
-  as the preferred name going forward.
-- **`runtime.can(event)`** — predicate that returns `true` iff sending the
-  event would fire a transition. Reuses `evalGuard`; guards must be pure
-  for `can` and `send` to agree.
-- **`runtime.on(type, listener, { signal?, once? })`** — `EventTarget`-style
-  typed event API. Channels: `'transition'` (after a state-changing `send`
-  or `reset`), `'error'` (async effect handler rejections), `'dispose'`
-  (fires once on teardown). `subscribe(listener)` is unchanged and still
-  preferred for `useSyncExternalStore`.
-
-Core gzip grew from 2.87 KB to ~3.3 KB; the size budget script raised the
-core cap to 3.5 KB with rationale in `scripts/check-size.mjs`.
-
-### Documentation restructure
-
-- `README.md` is now the canonical English README; the Traditional Chinese
-  mirror moved to `README_ZHTW.md`.
-- Added `llms.txt` and `llms-full.txt` following the [llmstxt.org](https://llmstxt.org/)
-  convention so LLM agents can ground in the project surface with one fetch.
-  `llms-full.txt` is generated by `scripts/build-llms-full.mjs`; `pnpm
-  verify:llms` re-runs the generator and diffs to catch drift.
-- New "Design choices" section in both READMEs explains why send is sync,
-  guards are sync, effects are descriptors, why two factory forms exist,
-  and why `on` and `subscribe` both ship.
-
-### CI guarantees
-
-- **Coverage threshold**: 100% statements / 100% lines / 100% functions /
-  ≥90% branches, enforced via `@vitest/coverage-v8` thresholds (actual on
-  v0.1.0 release: 100/100/100/98.81). Defensive invariant-guard branches
-  carry `/* v8 ignore */` annotations with rationale comments.
-- **Per-subpath gzip size budget** (verified by `scripts/check-size.mjs`):
-  core ≤3 KB · replay ≤1.6 KB · pbt ≤4.5 KB · guards / effects / inspect /
-  timer ≤1 KB each. Tarball measured at ~98 KB / 48 files.
-
-### Out of scope (v1)
-
-Hierarchical / compound states, parallel state regions, actor invocation
-(async), tick/game-loop hook, ECS / Pixi bridges. See Roadmap in README.
+- Hardened async guard rejection, reset snapshot integrity, sub-machine lifecycle cleanup, and scheduler abort cleanup.
+- Clarified fire-and-forget effect semantics and post-commit ordering.
+- Regenerated generated LLM context from canonical docs.
+
+## Older releases
+
+- `0.5.5` through `0.5.1` focused on release hygiene, docs accuracy, property tests, and lifecycle regressions.
+- `0.4.x` stabilized sub-machine lifecycle semantics.
+- `0.3.x` added inspect/replay/PBT/timer helpers and dependency reduction.
+- `0.2.x` hardened definitions, guard/action resolution, and examples.
+- `0.1.x` introduced `defineMachine`, `createRuntime`, `step`, `assign`, snapshots, and core error classes.
 
 ---
 
@@ -954,124 +130,39 @@ Hierarchical / compound states, parallel state regions, actor invocation
 
 # Stability
 
-This document defines the stability tier of every public symbol exported by
-`aifsmjs`. Tiers govern what breaks may occur in future minor / major bumps.
+## Stable Surface
 
-## Stable (since 0.1.0)
+| Surface | Status | Notes |
+| --- | --- | --- |
+| `aifsmjs` root | Stable | Definition/runtime/step/snapshot APIs and core errors. |
+| `aifsmjs/guards` | Stable | Sync guard combinators. |
+| `aifsmjs/effects` | Stable | Effect descriptors and dispatcher helper. |
+| `aifsmjs/inspect` | Stable | Read-only middleware helpers. |
+| `aifsmjs/replay` | Stable | Pure log replay. |
+| `aifsmjs/pbt` | Stable | fast-check helpers. |
+| `aifsmjs/timer` | Stable | Timer/scheduler helpers. |
 
-Fully stable. Breaking changes only at a major version bump (1.0+).
+## Behavioral Contract
 
-- `createMachine`, `defineMachine`, `setup`, `createRuntime`, `initialSnapshot`
-- `step`, `resolveTransitions`, `evalGuard`, `resolveGuard`, `isAsyncGuardFn`
-- `assign`, `mergeContext`, `createSnapshot`, `deepFreeze`, `freezeSnapshot`
-- `Runtime.send`, `Runtime.reset`, `Runtime.can`, `Runtime.getSnapshot`,
-  `Runtime.snapshot`, `Runtime.subscribe`, `Runtime.on`, `Runtime.dispose`,
-  `Runtime.signal`, `Runtime.disposed`
-- All error classes from 0.1.0–0.2.1: `RuntimeDisposedError`,
-  `InvalidDefinitionError`, `UnknownActionError`, `UnknownGuardError`,
-  `AsyncGuardError`
-- Types: `MachineDef`, `StateDef` (fields `on`, `entry`, `exit`, `final`),
-  `TransitionDef`, `Snapshot`, `Implementations`, `Guard`, `Action`,
-  `EffectHandler`, `Effect`, `Enqueuer`, `Middleware`, `MiddlewareContext`,
-  `RuntimeOptions`, `StepResult`, `ResetEvent`, `RESET_EVENT_TYPE`,
-  `RuntimeTransitionEvent`, `RuntimeErrorEvent`, `RuntimeEventMap`
-- All subpath exports: `aifsmjs/guards`, `aifsmjs/effects`, `aifsmjs/inspect`,
-  `aifsmjs/replay`, `aifsmjs/pbt`, `aifsmjs/timer`
-- `Runtime.onTransition` (added in 0.3.0) — pure sugar over the stable
-  `on('transition', ...)` API; listed under Stable because the underlying
-  contract is unchanged.
+- Definition data is serializable when using string refs instead of inline functions.
+- `step()` is pure and never dispatches effects.
+- Runtime commit happens before middleware, effect dispatch, and listener notification.
+- Async effects are fire-and-forget; rejections emit runtime `"error"`.
+- `reset()` does not run entry actions.
+- `dispose()` aborts runtime signal, clears listeners, and is idempotent.
 
-### Sub-machines (stable since 0.4.0)
+## Sub-machines
 
-The hierarchical sub-machine surface shipped experimentally in 0.3.0 is
-stable as of 0.4.0. Signatures and runtime semantics — including the
-init-failure quarantine behaviour described below — are frozen for the 1.x
-line. The boundaries listed are intentional design trade-offs, not bugs or
-pending instability.
+Sub-machines are stable but sharp:
 
-- `StateDef.sub` (optional `SubMachineDef`) — when present, a child runtime
-  is lazily initialised on entry and disposed on exit. Per-transition
-  ordering is parent `step()` (exit / actions / entry) → child dispose →
-  child init → snapshot commit.
-- `StateDef.subImpl` (optional `Implementations`) — paired with `sub`;
-  passed to the child `createRuntime`. Defaults to `{}`.
-- `Runtime.subRuntime()` — returns the live child handle, or `undefined`.
-  Returned generic is `Runtime<unknown, { type: string }, string>`; caller
-  narrows via cast if necessary.
-- `SubMachineError` — thrown by `send()` / `reset()` on child init/dispose
-  failure. Fields: `parentState`, `phase ("init" | "dispose")`, `cause`.
-- `SubMachineDef` type alias.
+- Entry lazily creates the child; exit disposes it.
+- Init failure rolls back parent transition.
+- Dispose failure happens after the old child is already torn down and surfaces as `SubMachineError`.
+- External child disposal leaves a stale handle until the parent leaves/re-enters the state.
 
-#### Design boundaries
+## Drafts
 
-- **Replay / PBT do not see child state.** `replay()` and
-  `commandsFromMachine` only inspect parent snapshots. If your business
-  logic lives in the parent layer, replay is still deterministic.
-- **`subRuntime()` may return a disposed handle** if an external caller
-  disposed it. The handle is not reinitialised until the parent leaves and
-  re-enters the sub-bearing state. Detect with `child.disposed`.
-- **Self-targeting external (`A → A`) is treated as full exit/entry**:
-  child is disposed and reinitialised. The dispatcher re-resolves guards to
-  identify the chosen transition before deciding external vs internal, so
-  guarded internal transitions on the same event do not trigger a reinit.
-- **Init-failure mid-transition leaves the parent without a live child.**
-  If `applySubLifecycle` successfully disposes the old child and then the
-  new child's `createRuntime` throws, the parent's snapshot is rolled back
-  to `prev` but `subRuntime()` returns `undefined`. Callers catching
-  `SubMachineError(phase: "init")` should treat the runtime as quarantined
-  — call `runtime.dispose()` (idempotent) or `runtime.reset()` (which
-  attempts re-init) before sending further events. This quarantine
-  behaviour is part of the stable contract; a future **major** version may
-  switch to a two-phase "init before dispose" commit strategy (a breaking
-  change reserved for 1.0+), but the current semantics are frozen for the
-  1.x line.
-
-### Middleware, effects & notification ordering (documented boundaries)
-
-These are intentional ordering boundaries of the read-only middleware /
-effect pipeline, not bugs. They are stable for the 1.x line.
-
-- **A synchronous throw from a middleware or effect handler leaves the
-  snapshot committed but unannounced.** Inside `send()` / `reset()` the new
-  snapshot is committed (so `getSnapshot()` already reflects it) *before*
-  `runMiddleware()` and effect dispatch run. If a middleware or effect
-  handler throws synchronously, the throw propagates to the `send()` /
-  `reset()` caller (as documented), but `notify()`, `on('transition')`
-  listeners, and — for a middleware throw — the collected effects are
-  skipped. Observers therefore desynchronise from `getSnapshot()`. The
-  shipped `persist` middleware throws on non-serialisable context, making
-  this reachable without exotic code. Wrap throwing middleware/effects in
-  your own `try/catch` if you need observers to fire regardless. (Contrast:
-  the sub-machine init/dispose failure path *rolls back* instead — see
-  above.) A future **major** may move the commit after the pipeline; the
-  current order is frozen for 1.x.
-- **`next()` must be called by every middleware; skipping it is not
-  enforced.** Calling `next()` twice throws; calling it zero times is
-  silently tolerated and drops every later middleware (and the recorder /
-  persist sinks) for that event — no throw, no warning. The state transition
-  itself is unaffected (the snapshot is committed before the pipeline). Treat
-  `next()` as mandatory.
-- **Re-entrant `send()` from inside middleware reorders recorder logs.**
-  Middleware is documented read-only; a middleware that re-entrantly calls
-  `runtime.send()` runs the inner event's full pipeline (including the
-  recorder push) before the outer frame reaches the recorder. The
-  `recorder` sink — intended to feed `replay()` — then lists `[inner,
-  outer]` for an application order of `[outer, inner]`, so replaying that log
-  diverges. Do not `send()` from within the middleware pipeline.
-
-## Experimental
-
-No experimental APIs as of 0.4.0. The 0.3.0 sub-machine surface graduated to
-Stable in 0.4.0 — see "Sub-machines" above.
-
-## Draft (planned, not implemented)
-
-API sketched, not shipped. May change before release.
-
-- `historyState` (candidate for a future minor) — opt-in pseudo-state that
-  remembers the last active sub-state on re-entry. Workaround in 0.3.0:
-  snapshot the sub-runtime's value on exit via `onTransition`, restore
-  manually.
+Parallel regions, actor spawning, async guards, and awaited effect completion are not implemented.
 
 ---
 
@@ -1079,103 +170,35 @@ API sketched, not shipped. May change before release.
 
 # Contributing to aifsmjs
 
-Thanks for taking the time to look. aifsmjs is a deliberately small library;
-contributions that keep the surface narrow are easier to accept than ones
-that expand it.
+Keep the deterministic core small and make lifecycle changes test-heavy.
 
-## Quick start
+## Local workflow
 
 ```bash
 pnpm install
-pnpm test            # vitest, ~117 example tests + PBT smoke runs
-pnpm coverage        # vitest with 100/100/100/90 thresholds (CI-enforced)
-pnpm typecheck       # tsc --noEmit on strict mode
-pnpm lint            # biome check
-pnpm build           # tsup; dual ESM/CJS + .d.ts
-pnpm verify:exports  # ensures package.json#exports matches dist/
-pnpm check:size      # gzip per subpath against the size budget
+pnpm typecheck
+pnpm test
+pnpm verify:docs
+pnpm build:llms
+pnpm verify:llms
+pnpm verify:exports
+pnpm verify:dist
+pnpm check:size
 ```
 
-The full pre-publish gate is `pnpm prepublishOnly`, which runs typecheck,
-lint, coverage (with thresholds), build, exports verification, and size
-budget check — in that order.
+Run `pnpm lint` before PRs. If docs change, regenerate `llms-full.txt`.
 
-## What gets in easily
+## Rules
 
-- Bug fixes with a failing test added first
-- README / typing corrections
-- Tests that lock down existing behaviour
-- New `aifsmjs/<subpath>` opt-in modules that follow the same shape as
-  `guards`, `effects`, `inspect`, `replay`, `pbt`, `timer`: independent,
-  named exports only, no side effects, single responsibility
-
-## What needs discussion first
-
-- Anything that changes the `step()` signature or lifecycle order
-- New required fields on `MachineDef` or `Snapshot`
-- A change that would push the core gzip past ~3KB
-- Hierarchical / parallel / actor features (v0.2+ — open an issue with the
-  use case)
-
-## Design principles
-
-aifsmjs follows a library-core priority order:
-
-> Security > Correctness > Simplicity > YAGNI > Performance
-
-In particular, `step()` must remain a pure function: identical
-`(def, snapshot, event, impl)` always returns identical
-`{ snapshot, effects, changed }`. Any change that breaks this invariant will
-be rejected.
-
-## Commit & PR style
-
-- Commit messages: imperative subject under 70 chars; body explains *why*.
-- PRs: keep scope to one topic. Link the issue if any.
-- Tests required for any behaviour change. PBT preferred for invariants;
-  example tests preferred for behaviour you want documented.
-
-## Reporting issues
-
-- Minimal reproduction welcome (paste the smallest `defineMachine + step`
-  pair that shows the bug).
-- For security issues, please email the maintainer rather than filing
-  publicly.
-
-## Release flow
-
-Releases are automated via the **Publish to npm** GitHub Action
-([`.github/workflows/publish.yml`](.github/workflows/publish.yml)). The
-required `NPM_TOKEN` secret is already configured at the repo level. From
-a clean tree on `main`:
-
-```bash
-# 1. Bump version + create commit + create tag (single command)
-pnpm version patch       # or `minor` / `major`
-
-# 2. Push the commit AND the tag in one go
-git push --follow-tags
-```
-
-The workflow triggers on `v*` tag push and runs the full gate before
-publishing:
-
-1. verify tag matches `package.json#version`
-2. typecheck / lint / coverage (with 100/100/100/90 thresholds)
-3. build / verify exports / check bundle sizes / verify llms-full.txt
-4. `pnpm publish --provenance --access public` (npm supply-chain
-   attestation is generated automatically)
-
-A failed gate stops the publish; the tag stays on the repo but nothing
-ships. If you need to test the gate without publishing, trigger the
-workflow manually via `workflow_dispatch` with `dry-run: true`.
-
-For prereleases (e.g. `0.2.0-rc.1`), tag manually with `git tag v0.2.0-rc.1 && git push --tags`. npm will mark the version with the `rc` dist-tag once published — adjust the workflow if you need a different tag strategy.
+- Preserve `step()` purity and replay determinism.
+- Keep guards synchronous; route I/O through effects and events.
+- Add tests for runtime commit ordering, sub-machine lifecycle, reset, dispose, and scheduler cancellation.
+- Keep subpath imports tree-shakeable.
+- Discuss public type inference changes before implementation.
 
 ## License
 
-By contributing, you agree your changes will be licensed under the MIT
-license that covers this project.
+MIT
 
 ---
 

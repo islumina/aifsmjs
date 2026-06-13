@@ -1,37 +1,10 @@
 # aifsmjs
 
-> A small, strict FSM (finite state machine) library built for web game development. The lifecycle is a pure `step()` function with a fixed `guards → exit → action → entry` order. Chain-of-Responsibility intuition is reserved for cross-cutting concerns (observe / persist / replay), never for the transition core. Browser / Node / Flutter WebView friendly. Zero production dependencies; `fast-check` is an optional peer for the built-in property-based testing adapter.
+Deterministic FSM toolkit with plain-data definitions, pure step(), runtime effects, replay, PBT, and timers.
 
-Primary audience: developers building browser-based games and interactive web experiences on PixiJS, Svelte 5 runes, plain Canvas, or WebGL. Typical use cases include scene flow (`loading → menu → playing → result`), character AI state, interactive UI flows, tutorial steps, and turn-based logic.
-
-Key guarantees: pure `step()` is deterministic and replayable; runtime exposes `dispose()`, `reset()`, and an `AbortSignal` that is threaded to every `EffectHandler`; named errors (`RuntimeDisposedError`, `UnknownGuardError`, `UnknownActionError`, `InvalidDefinitionError`) instead of bare throws; subpath exports with `sideEffects: false`; core gzip ~2.87 KB.
-
-## Documentation
-
-- [README.md](README.md): canonical English README — full overview, Mental Model, Core API, Opt-in modules (guards / effects / inspect / replay / pbt / timer), Lifecycle Protocol, Lifecycle Invariants, AI-Agent Reading Guide, Testing Strategy, Comparison, Roadmap.
-- [README_ZHTW.md](README_ZHTW.md): Traditional Chinese mirror of the canonical README.
-- [CHANGELOG.md](CHANGELOG.md): Keep a Changelog format; v0.1.0 entry covers core + every opt-in plus CI guarantees.
-- [CONTRIBUTING.md](CONTRIBUTING.md): quick-start commands, what gets in easily vs needs discussion, design principles, commit & PR style.
-- [llms-full.txt](llms-full.txt): the canonical README plus CHANGELOG, CONTRIBUTING, examples README, and public type signatures concatenated into one file — load this when an AI agent needs the full context in a single fetch.
-
-## Source layout
-
-- [src/index.ts](src/index.ts): main barrel — re-exports the `fsm/` core module.
-- [src/fsm/](src/fsm/): pure core — `definition.ts` (defineMachine / setup), `runtime.ts` (createRuntime with dispose / reset / signal), `lifecycle.ts` (the pure `step()`), `snapshot.ts`, `evaluator.ts`, `resolver.ts`, `updater.ts` (assign / mergeContext), `types.ts` (every public type collected in one file for AI consumption).
-- [src/guards/](src/guards/): `and`, `or`, `not`, `stateIn` higher-order combinators. Subpath import: `aifsmjs/guards`.
-- [src/effects/](src/effects/): `Enqueuer`, `createEnqueuer`, `runEffects` dispatcher with optional `AbortSignal`. Subpath: `aifsmjs/effects`.
-- [src/inspect/](src/inspect/): Koa-style read-only middleware — `logger`, `persist`, `recorder`. Subpath: `aifsmjs/inspect`.
-- [src/replay/](src/replay/): `replay(initial, log, def, impl)` pure event-log fold. Subpath: `aifsmjs/replay`.
-- [src/pbt/](src/pbt/): `commandsFromMachine` + 6 generic property tests + `assertAll`. Subpath: `aifsmjs/pbt`. Requires `fast-check` as an optional peer.
-- [src/timer/](src/timer/): cancellable `after(ms, fn, { signal })` and `createScheduler`. Subpath: `aifsmjs/timer`.
-
-## Examples
-
-- [examples/01-traffic-light/index.ts](examples/01-traffic-light/index.ts): minimal `setup → defineMachine → createRuntime → send` loop with `assign` and a snapshot subscriber. Maps to a cyclic scene-flow pattern in a web game.
-- [examples/02-approval-workflow/index.ts](examples/02-approval-workflow/index.ts): multi-candidate guarded transitions with `and([...])`, effects + handlers, `persist` and `recorder` middleware, plus `replay()` to reproduce the final snapshot. Maps to turn-based logic with branching outcomes and post-mortem replay.
-
-## Quality gates
-
-- [.github/workflows/ci.yml](.github/workflows/ci.yml): Node 20 + 22 matrix on Ubuntu; runs typecheck, lint (biome), coverage (vitest + @vitest/coverage-v8 with 100/100/100/90 thresholds), build (tsup multi-entry → ESM + CJS + .d.ts), exports verification, and size budget check.
-- [scripts/check-size.mjs](scripts/check-size.mjs): per-subpath gzip budget enforcement (core ≤3 KB, replay ≤1.6 KB, pbt ≤4.5 KB, others ≤1 KB).
-- [scripts/verify-exports.mjs](scripts/verify-exports.mjs): asserts every `package.json#exports` entry resolves to a real file in `dist/`.
+- Start: README.md
+- Stability: STABILITY.md
+- Current backlog: REVIEW.md
+- Examples: examples/README.md
+- Changelog: CHANGELOG.md
+- Full generated context: llms-full.txt
