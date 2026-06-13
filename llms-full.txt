@@ -15,7 +15,7 @@ The short index lives at `llms.txt` (see https://llmstxt.org/).
 
 Small deterministic FSM library for replayable TypeScript/JavaScript state machines. Definitions are plain data; guards/actions/effects are injected at runtime.
 
-> **Status: 0.5.6 - stable 1.0-track core.** Core FSM, guards, effects, inspect, replay, PBT helpers, scheduler, and sub-machines are live.
+> **Status: 0.5.8 - stable 1.0-track core.** Core FSM, guards, effects, inspect, replay, PBT helpers, scheduler, and sub-machines are live.
 
 ## Install
 
@@ -107,8 +107,9 @@ All notable changes to aifsmjs are summarized here.
 
 ## [Unreleased]
 
-- Documentation-only slimming pass across README, stability notes, review backlog, and LLM context.
-- Known follow-ups: preserve `setup().defineMachine()` inference tests and decide whether post-commit synchronous middleware/effect throws need an opt-in safer mode.
+## [0.5.8] - 2026-06-14
+
+- Documentation-only slimming pass across README, stability notes, review backlog, and LLM context. Family version alignment at 0.5.8 — no runtime or API change. `setup().defineMachine()` inference tests and an opt-in safer mode for post-commit synchronous throws remain documented follow-ups.
 
 ## [0.5.6] - 2026-06-10
 

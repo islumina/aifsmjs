@@ -2,7 +2,7 @@
 
 Small deterministic FSM library for replayable TypeScript/JavaScript state machines. Definitions are plain data; guards/actions/effects are injected at runtime.
 
-> **Status: 0.5.6 - stable 1.0-track core.** Core FSM, guards, effects, inspect, replay, PBT helpers, scheduler, and sub-machines are live.
+> **Status: 0.5.8 - stable 1.0-track core.** Core FSM, guards, effects, inspect, replay, PBT helpers, scheduler, and sub-machines are live.
 
 ## Install
 

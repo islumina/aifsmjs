@@ -4,8 +4,9 @@ All notable changes to aifsmjs are summarized here.
 
 ## [Unreleased]
 
-- Documentation-only slimming pass across README, stability notes, review backlog, and LLM context.
-- Known follow-ups: preserve `setup().defineMachine()` inference tests and decide whether post-commit synchronous middleware/effect throws need an opt-in safer mode.
+## [0.5.8] - 2026-06-14
+
+- Documentation-only slimming pass across README, stability notes, review backlog, and LLM context. Family version alignment at 0.5.8 — no runtime or API change. `setup().defineMachine()` inference tests and an opt-in safer mode for post-commit synchronous throws remain documented follow-ups.
 
 ## [0.5.6] - 2026-06-10
 
