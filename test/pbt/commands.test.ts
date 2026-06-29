@@ -51,18 +51,23 @@ describe("commandsFromMachine", () => {
 
   it("SendCommand.toString shows the dispatched event", () => {
     const impl = makeImpl();
-    let captured = "";
     const arb = commandsFromMachine(trafficLight, impl, eventArbs);
+    // `fc.commands` can generate an empty sequence, so a single run (numRuns: 1)
+    // is flaky — an empty draw leaves nothing to inspect. Assert the format of
+    // EVERY generated command across many runs and require that at least one
+    // command was actually exercised, which is deterministic in practice
+    // because `size: "+1"` biases toward non-empty sequences.
+    let checked = 0;
     fc.assert(
       fc.property(arb, (cmds) => {
         for (const c of cmds) {
-          captured = c.toString();
-          break;
+          expect(c.toString()).toMatch(/^send\(\{/);
+          checked++;
         }
         return true;
       }),
-      { numRuns: 1 },
+      { numRuns: 50 },
     );
-    expect(captured).toMatch(/^send\(\{/);
+    expect(checked).toBeGreaterThan(0);
   });
 });
