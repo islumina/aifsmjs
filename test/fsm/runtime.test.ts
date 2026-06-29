@@ -355,6 +355,44 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
+  it("dispose() never rethrows a throwing 'dispose' listener and still completes teardown (C1)", () => {
+    // Regression: emit('dispose') fired BEFORE the eventListeners sets were
+    // cleared and before externalAbortCleanups ran, and emit() had no
+    // per-listener try/catch. A throwing 'dispose' listener therefore escaped
+    // dispose() (violating the never-throws/idempotent contract: README:65,
+    // STABILITY.md:22, runtime.ts:34) AND aborted the rest of teardown, so the
+    // external-signal abort listener leaked and a second dispose() short-
+    // circuited on `if (disposed) return` without ever cleaning it up.
+    const runtime = createRuntime(trafficLight, makeImpl());
+
+    // External signal whose abort listener MUST be detached during dispose().
+    const ac = new AbortController();
+    const removeSpy = vi.spyOn(ac.signal, "removeEventListener");
+    runtime.on("transition", vi.fn(), { signal: ac.signal });
+
+    // A 'dispose' listener that throws.
+    const disposeListener = vi.fn(() => {
+      throw new Error("dispose-listener-boom");
+    });
+    runtime.on("dispose", disposeListener);
+
+    // 1. dispose() must NOT rethrow the listener error (never-throws contract).
+    expect(() => runtime.dispose()).not.toThrow();
+    expect(disposeListener).toHaveBeenCalledTimes(1);
+
+    // 2. Teardown must still complete despite the throw: the external-signal
+    //    abort listener was detached (no leak).
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+
+    // 3. A second dispose() is idempotent: no re-emit, no throw.
+    expect(() => runtime.dispose()).not.toThrow();
+    expect(disposeListener).toHaveBeenCalledTimes(1);
+
+    // 4. Listener sets were cleared, so aborting the external signal now is a
+    //    harmless no-op (the listener can't fire post-dispose).
+    expect(() => ac.abort()).not.toThrow();
+  });
+
   it("on({once}) removes the listener after first call", () => {
     const runtime = createRuntime(trafficLight, makeImpl());
     const fn = vi.fn();

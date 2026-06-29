@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import * as fc from "fast-check";
 import { initialSnapshot } from "../fsm/definition.js";
 import { step } from "../fsm/lifecycle.js";
@@ -25,6 +26,25 @@ function buildAssertOpts(opts: AssertOpts | undefined): fc.Parameters<unknown> {
   if (opts?.seed !== undefined) out.seed = opts.seed;
   if (opts?.verbose) out.verbose = true;
   return out;
+}
+
+/**
+ * Structural deep-equality for two context values (C3). Backed by `node:util`
+ * `isDeepStrictEqual`, replacing the previous `JSON.stringify(a) === JSON.stringify(b)`
+ * oracle which was unsound:
+ *
+ *   - key-order-sensitive  → false-FAIL on `{a:1,b:2}` vs `{b:2,a:1}`;
+ *   - drops undefined keys  → false-PASS on `{v:undefined,w:1}` vs `{w:1}`;
+ *   - lossy for `Map`/`Set`/`Date` (all serialise to `{}` or an ISO string);
+ *   - throws on `BigInt`.
+ *
+ * `isDeepStrictEqual` distinguishes present-but-undefined from absent keys,
+ * compares `Map`/`Set`/`Date` by contents, and tolerates `BigInt` — exactly
+ * the verdicts a context-equality oracle for PBT requires. No new dependency
+ * (Node built-in; the package already targets Node >=18).
+ */
+export function contextEquals(a: unknown, b: unknown): boolean {
+  return isDeepStrictEqual(a, b);
 }
 
 /**
@@ -116,10 +136,7 @@ export function replayEqualsFold<Ctx, Evt extends { type: string }, States exten
       for (const e of events) real.send(e);
       const live = real.getSnapshot();
       const replayed = replay(initialSnapshot(def), events, def, impl).snapshot;
-      return (
-        live.value === replayed.value &&
-        JSON.stringify(live.context) === JSON.stringify(replayed.context)
-      );
+      return live.value === replayed.value && contextEquals(live.context, replayed.context);
     }),
     buildAssertOpts(opts),
   );
@@ -203,10 +220,15 @@ export function assignDoesNotMutate<Ctx, Evt extends { type: string }, States ex
       (events) => {
         let snap = initialSnapshot(def);
         for (const e of events) {
-          const beforeCtxSerialised = JSON.stringify(snap.context);
+          // Structural snapshot of the pre-step context (C3). structuredClone +
+          // contextEquals replaces the old JSON.stringify round-trip, which was
+          // lossy for Map/Set/Date and threw on BigInt. structuredClone produces
+          // an independent copy so a subsequent in-place mutation by step() is
+          // detectable by deep comparison.
+          const beforeCtx = structuredClone(snap.context);
           step(def, snap, e, impl);
           /* v8 ignore next — property failure branch; step() mutating snap.context would indicate a bug. */
-          if (JSON.stringify(snap.context) !== beforeCtxSerialised) return false;
+          if (!contextEquals(snap.context, beforeCtx)) return false;
           // Continue with the actual result for subsequent events
           snap = step(def, snap, e, impl).snapshot;
         }

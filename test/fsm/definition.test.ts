@@ -95,6 +95,156 @@ describe("defineMachine", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// C2 — sub-machine definitions are deep-validated at construction.
+//
+// defineMachine ran validateDefinition at the TOP level only; a state's `sub`
+// got a shallow shape check but its transitions + guards were never validated.
+// A sub with an unknown transition target or a declared-async guard was
+// accepted at construction and only blew up (or wedged into a ghost state) at
+// child.send(). defineMachine must reject these eagerly, with a CYCLE GUARD so
+// a self/mutually-referential sub does not cause infinite recursion.
+// ---------------------------------------------------------------------------
+describe("defineMachine — sub-machine deep validation (C2)", () => {
+  it("throws InvalidDefinitionError when a sub has an unknown transition target", () => {
+    expect(() =>
+      defineMachine<{ n: number }, { type: "GO" }, "a" | "b">({
+        id: "parent-sub-bad-target",
+        initial: "a",
+        context: { n: 0 },
+        states: {
+          a: {
+            sub: {
+              id: "child",
+              initial: "x",
+              context: {},
+              states: {
+                // "ghost-sub" is not a declared state of the sub → invalid.
+                // biome-ignore lint/suspicious/noExplicitAny: invalid input on purpose
+                x: { on: { GO: { target: "ghost-sub" as any } } },
+              },
+              // biome-ignore lint/suspicious/noExplicitAny: cross-shape literal for the deep-validation test
+            } as any,
+            on: { GO: { target: "b" } },
+          },
+          b: {},
+        },
+      }),
+    ).toThrow(InvalidDefinitionError);
+  });
+
+  it("throws InvalidDefinitionError when a sub has a declared-async guard", () => {
+    expect(() =>
+      defineMachine<{ n: number }, { type: "GO" }, "a" | "b">({
+        id: "parent-sub-async-guard",
+        initial: "a",
+        context: { n: 0 },
+        states: {
+          a: {
+            sub: {
+              id: "child",
+              initial: "x",
+              context: {},
+              states: {
+                // biome-ignore lint/suspicious/noExplicitAny: deliberate misuse to verify the guard check
+                x: { on: { GO: { target: "y", guard: (async () => true) as any } } },
+                y: {},
+              },
+              // biome-ignore lint/suspicious/noExplicitAny: cross-shape literal for the deep-validation test
+            } as any,
+            on: { GO: { target: "b" } },
+          },
+          b: {},
+        },
+      }),
+    ).toThrow(/async guard/);
+  });
+
+  it("the async-guard rejection message names the offending transition (not silent until child.send())", () => {
+    expect(() =>
+      defineMachine<{ n: number }, { type: "GO" }, "a" | "b">({
+        id: "parent-sub-async-guard-msg",
+        initial: "a",
+        context: { n: 0 },
+        states: {
+          a: {
+            sub: {
+              id: "child",
+              initial: "x",
+              context: {},
+              states: {
+                // biome-ignore lint/suspicious/noExplicitAny: deliberate misuse to verify the guard check
+                x: { on: { GO: { target: "y", guard: (async () => true) as any } } },
+                y: {},
+              },
+              // biome-ignore lint/suspicious/noExplicitAny: cross-shape literal for the deep-validation test
+            } as any,
+            on: { GO: { target: "b" } },
+          },
+          b: {},
+        },
+      }),
+    ).toThrow(InvalidDefinitionError);
+  });
+
+  it("accepts a sub whose transitions + guards are all valid", () => {
+    expect(() =>
+      defineMachine<{ n: number }, { type: "GO" }, "a" | "b">({
+        id: "parent-sub-ok",
+        initial: "a",
+        context: { n: 0 },
+        states: {
+          a: {
+            sub: {
+              id: "child",
+              initial: "x",
+              context: {},
+              states: {
+                x: { on: { GO: { target: "y" } } },
+                y: {},
+              },
+              // biome-ignore lint/suspicious/noExplicitAny: cross-shape literal for the deep-validation test
+            } as any,
+            on: { GO: { target: "b" } },
+          },
+          b: {},
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("cycle guard: a sub that references itself terminates (no stack overflow)", () => {
+    // Build a self-referential sub: parent.a.sub === the sub, and the sub's
+    // own state also points its `.sub` back at itself. Without a cycle guard,
+    // recursive validation would never terminate. The valid (cyclic but
+    // otherwise correct) definition must construct without throwing or hanging.
+    // biome-ignore lint/suspicious/noExplicitAny: self-referential structure for the cycle-guard test
+    const selfSub: any = {
+      id: "self-sub",
+      initial: "x",
+      context: {},
+      states: {
+        x: { on: { GO: { target: "y" } } },
+        y: {},
+      },
+    };
+    // Close the cycle: the sub's state references the same sub object.
+    selfSub.states.x.sub = selfSub;
+
+    expect(() =>
+      defineMachine<{ n: number }, { type: "GO" }, "a" | "b">({
+        id: "parent-cyclic-sub",
+        initial: "a",
+        context: { n: 0 },
+        states: {
+          a: { sub: selfSub, on: { GO: { target: "b" } } },
+          b: {},
+        },
+      }),
+    ).not.toThrow();
+  });
+});
+
 describe("initialSnapshot", () => {
   it("uses the initial state and context", () => {
     const def = defineMachine<{ n: number }, { type: string }, "a" | "b">({

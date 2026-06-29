@@ -383,10 +383,22 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     }
     controller.abort();
     listeners.clear();
-    emit("dispose", undefined as RuntimeEventMap<Ctx, Evt, States>["dispose"]);
-    for (const set of Object.values(eventListeners)) set.clear();
-    for (const cleanup of externalAbortCleanups) cleanup();
-    externalAbortCleanups.clear();
+    // §3.6 dispose() is contractually never-throws + idempotent (README:65,
+    // STABILITY.md:22). emit('dispose') runs user listeners; a throwing one
+    // must neither escape dispose() nor abort the remaining teardown (which
+    // would leak external-signal abort listeners, since a second dispose()
+    // short-circuits on `if (disposed) return`). The try/finally guarantees
+    // the listener-set clear + externalAbortCleanups loop ALWAYS run, mirroring
+    // the defensiveness of the child-dispose cascade above.
+    try {
+      emit("dispose", undefined as RuntimeEventMap<Ctx, Evt, States>["dispose"]);
+    } catch {
+      /* swallow — never-throws contract */
+    } finally {
+      for (const set of Object.values(eventListeners)) set.clear();
+      for (const cleanup of externalAbortCleanups) cleanup();
+      externalAbortCleanups.clear();
+    }
   }
 
   const runtime: Runtime<Ctx, Evt, States> = {

@@ -2,7 +2,7 @@
 
 小型 deterministic FSM 函式庫，適合可 replay 的 TypeScript/JavaScript state machine。Definition 是 plain data；guards/actions/effects 在 runtime 注入。
 
-> **狀態：0.5.8 - 穩定 1.0 軌道核心。** Core FSM、guards、effects、inspect、replay、PBT helpers、scheduler、sub-machines 都已可用。
+> **狀態：0.5.9 - 穩定 1.0 軌道核心。** Core FSM、guards、effects、inspect、replay、PBT helpers、scheduler、sub-machines 都已可用。
 
 ## 安裝
 

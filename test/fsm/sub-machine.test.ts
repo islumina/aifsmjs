@@ -143,10 +143,14 @@ describe("Group B — Initial sub-machine instantiation", () => {
   });
 
   it("B3: createRuntime throws SubMachineError(phase: init) if child init throws", () => {
-    // We need a sub that passes the parent's shallow validation
-    // (states is an object, initial is a string) but causes createRuntime to throw.
-    // Strategy: nested sub — inner sub has states:null which bypasses parent's shallow check
-    // (parent only checks direct sub's states/initial, not grandchild).
+    // We need a sub that causes createRuntime to throw at bootstrap. As of C2,
+    // defineMachine deep-validates subs, so a malformed sub can no longer be
+    // smuggled past construction; we therefore build a VALID parent, then mutate
+    // the state's `sub` to a malformed nested sub AFTER defineMachine (simulating
+    // a dynamically-injected / corrupted def). createRuntime's bootstrap then
+    // boots the bad sub, whose grandchild has states:null → createRuntime throws,
+    // which initChildFor wraps as SubMachineError(phase: "init"). This still
+    // exercises the init-failure path; only the smuggling vector changed.
     // biome-ignore lint/suspicious/noExplicitAny: intentionally broken for error test
     const innerBadSub: any = { id: "inner-bad", initial: "y", context: {}, states: null };
     // biome-ignore lint/suspicious/noExplicitAny: intentionally broken for error test
@@ -161,11 +165,13 @@ describe("Group B — Initial sub-machine instantiation", () => {
       initial: "a",
       context: { n: 0 },
       states: {
-        // biome-ignore lint/suspicious/noExplicitAny: intentionally broken for error test
-        a: { sub: badSub as any, on: { GO: { target: "b" } } },
+        a: { on: { GO: { target: "b" } } },
         b: {},
       },
     });
+    // Inject the malformed sub post-construction (bypasses C2 deep validation).
+    // biome-ignore lint/suspicious/noExplicitAny: test patching
+    (def as any).states.a.sub = badSub;
     expect(() => createRuntime(def, {})).toThrow(SubMachineError);
     try {
       createRuntime(def, {});
@@ -511,37 +517,13 @@ describe("Group G — reset() interactions", () => {
   });
 
   it("G5a: reset() throws SubMachineError(phase: init) if new child init throws during reset", () => {
-    // Build a machine whose initial state has a sub that throws on createRuntime.
-    // Same nested-sub strategy as Group I.
+    // As of C2 a malformed sub cannot be smuggled past defineMachine, so we
+    // build a VALID machine, transition away from the sub-bearing state, then
+    // mutate the INITIAL state's `sub` to a malformed one AFTER construction.
+    // reset() then tries to re-init the child for the initial state and the
+    // bootstrap throws → SubMachineError(phase: "init").
     // biome-ignore lint/suspicious/noExplicitAny: intentionally broken for error test
     const innerBadSub: any = { id: "inner-bad-g", initial: "y", context: {}, states: null };
-    // biome-ignore lint/suspicious/noExplicitAny: intentionally broken for error test
-    const badSub: any = {
-      id: "bad-sub-reset",
-      initial: "x",
-      context: {},
-      states: { x: { sub: innerBadSub } },
-    };
-    const def = defineMachine<{ n: number }, { type: "GO" }, "a" | "b">({
-      id: "reset-init-throw",
-      initial: "a",
-      context: { n: 0 },
-      states: {
-        // biome-ignore lint/suspicious/noExplicitAny: intentionally broken for error test
-        a: { sub: badSub as any, on: { GO: { target: "b" } } },
-        b: {},
-      },
-    });
-    // createRuntime throws immediately — so use a machine where we can get a runtime first,
-    // patch the sub, then reset into the failing initial state.
-    // Easier: use a machine that transitions away from the sub-bearing initial state,
-    // then reset() tries to re-init the sub and fails.
-    // But createRuntime itself throws for state "a"... so we need a machine whose
-    // initial state has NO sub, but after transition the reset() goes to initial which DOES have sub.
-    // Actually we need a different approach: start from a state with no sub, build runtime ok,
-    // then mock the definition so reset() fails.
-    //
-    // Simpler: manipulate the def.states directly AFTER runtime is created.
     const workingDef = defineMachine<{ n: number }, { type: "GO" }, "idle" | "loaded">({
       id: "reset-init-throw-2",
       initial: "idle",
@@ -641,9 +623,11 @@ describe("Group H — dispose() cascade", () => {
 
 describe("Group I — SubMachineError rollback", () => {
   // Build a machine where send() to "loading" triggers a sub init that throws.
-  // Strategy: use nested sub — direct sub passes shallow validation (states is object,
-  // initial is string) but the grandchild has states:null so createRuntime throws
-  // when bootstrapping the initial sub-state of the direct sub.
+  // As of C2 a malformed sub cannot be smuggled past defineMachine, so we build
+  // a VALID parent (loading carries no sub at construction), then inject a
+  // malformed nested sub into loading.sub AFTER defineMachine. Entering
+  // "loading" via START boots that sub — whose grandchild has states:null →
+  // createRuntime throws — and initChildFor wraps it as SubMachineError(init).
   function makeThrowingInitParent() {
     // biome-ignore lint/suspicious/noExplicitAny: intentionally broken for error test
     const innerBadSub: any = { id: "inner-bad-i", initial: "y", context: {}, states: null };
@@ -654,7 +638,7 @@ describe("Group I — SubMachineError rollback", () => {
       context: {},
       states: { x: { sub: innerBadSub } }, // x.sub has states:null → createRuntime throws
     };
-    return defineMachine<
+    const def = defineMachine<
       { step: number },
       { type: "START" } | { type: "FINISH" },
       "idle" | "loading" | "done"
@@ -664,11 +648,14 @@ describe("Group I — SubMachineError rollback", () => {
       context: { step: 0 },
       states: {
         idle: { on: { START: { target: "loading" } } },
-        // biome-ignore lint/suspicious/noExplicitAny: intentionally broken for error test
-        loading: { sub: badSub as any, on: { FINISH: { target: "done" } } },
+        loading: { on: { FINISH: { target: "done" } } },
         done: { final: true },
       },
     });
+    // Inject the malformed sub post-construction (bypasses C2 deep validation).
+    // biome-ignore lint/suspicious/noExplicitAny: test patching
+    (def as any).states.loading.sub = badSub;
+    return def;
   }
 
   it("I1: child init throw during send() → parent snapshot.value rolled back to prev.value", () => {
