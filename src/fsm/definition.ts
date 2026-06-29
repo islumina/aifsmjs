@@ -21,6 +21,11 @@ export class InvalidDefinitionError extends Error {
 
 function validateDefinition<Ctx, Evt extends { type: string }, States extends string>(
   def: MachineDef<Ctx, Evt, States>,
+  // Cycle guard: subs may reference each other (or themselves) by object
+  // identity. We validate each distinct definition object at most once so a
+  // self/mutually-referential sub graph terminates instead of recursing
+  // forever (C2). Seeded by the public entry points below.
+  seen: WeakSet<object> = new WeakSet(),
 ): void {
   if (!def.id || typeof def.id !== "string") {
     throw new InvalidDefinitionError("definition must have a non-empty string `id`");
@@ -42,7 +47,12 @@ function validateDefinition<Ctx, Evt extends { type: string }, States extends st
     States,
     (typeof def.states)[States],
   ][]) {
-    // §4 shallow sub-shape check (~35 B gzip)
+    // §4 sub-shape check + deep recursion (C2). The shallow shape check rejects
+    // a malformed sub; recursing validateDefinition into the sub then rejects an
+    // unknown transition target or a declared-async guard at construction
+    // instead of leaving it to blow up at child.send(). Closes the FSM-07 sub
+    // async-guard discrepancy (same root). The cycle guard makes this safe for
+    // self/mutually-referential subs.
     if (stateDef.sub !== undefined) {
       const sub = stateDef.sub;
       const subStates = (sub as { states?: unknown }).states;
@@ -60,6 +70,11 @@ function validateDefinition<Ctx, Evt extends { type: string }, States extends st
         throw new InvalidDefinitionError(
           `state "${stateName}".sub is not a valid sub-machine definition (missing states or initial)`,
         );
+      }
+      // Recurse — but only once per distinct sub object (cycle guard).
+      if (!seen.has(sub as object)) {
+        seen.add(sub as object);
+        validateDefinition(sub as MachineDef<unknown, { type: string }, string>, seen);
       }
     }
     if (!stateDef.on) continue;
