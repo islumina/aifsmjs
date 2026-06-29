@@ -15,7 +15,7 @@ The short index lives at `llms.txt` (see https://llmstxt.org/).
 
 Small deterministic FSM library for replayable TypeScript/JavaScript state machines. Definitions are plain data; guards/actions/effects are injected at runtime.
 
-> **Status: 0.5.8 - stable 1.0-track core.** Core FSM, guards, effects, inspect, replay, PBT helpers, scheduler, and sub-machines are live.
+> **Status: 0.5.9 - stable 1.0-track core.** Core FSM, guards, effects, inspect, replay, PBT helpers, scheduler, and sub-machines are live.
 
 ## Install
 
@@ -107,6 +107,13 @@ All notable changes to aifsmjs are summarized here.
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-06-29
+
+- Fixed: `dispose()` never throws and always completes teardown even if a `'dispose'` event listener throws (external-signal abort cleanups no longer leak); restores the never-throws / idempotency contract.
+- Fixed: sub-machine definitions are now deep-validated at construction — an unknown transition target or a declared-async guard inside a `sub` is rejected by `defineMachine` (with a cycle guard) instead of surfacing only at `child.send()`.
+- Fixed: PBT replay/assign oracles use structural deep-equality (`node:util` `isDeepStrictEqual`) instead of `JSON.stringify`, which mis-handled key order, `undefined` keys, `Map`/`Set`/`Date`, and `BigInt`.
+- Docs: clarified that `replay()` reproduces parent value+context only (sub-machine state is not modelled) and that production snapshots are frozen at the top level only.
+
 ## [0.5.8] - 2026-06-14
 
 - Documentation-only slimming pass across README, stability notes, review backlog, and LLM context. Family version alignment at 0.5.8 — no runtime or API change. `setup().defineMachine()` inference tests and an opt-in safer mode for post-commit synchronous throws remain documented follow-ups.
@@ -150,7 +157,18 @@ All notable changes to aifsmjs are summarized here.
 - Runtime commit happens before middleware, effect dispatch, and listener notification.
 - Async effects are fire-and-forget; rejections emit runtime `"error"`.
 - `reset()` does not run entry actions.
-- `dispose()` aborts runtime signal, clears listeners, and is idempotent.
+- `dispose()` aborts runtime signal, clears listeners, and is idempotent. A throwing `'dispose'` listener is swallowed and never aborts teardown.
+
+## Replay caveat
+
+`replay()` and `step()` reproduce only the **parent** machine's `value` + `context` (`aifsmjs/replay`, "Pure event-log replay" in the README). Sub-machine state is **not** modelled: the pure lifecycle has no `sub` references, so a replayed/stepped snapshot reflects the parent state alone and never re-instantiates, advances, or restores any child runtime. To capture child state for time-travel or incident reproduction, snapshot the child separately from the live runtime via `subRuntime()`.
+
+## Snapshot freezing depth
+
+Snapshot freezing is depth-dependent on `NODE_ENV`:
+
+- **Dev** (`NODE_ENV !== "production"`): the whole snapshot tree is deep-frozen, so accidental nested mutation throws immediately.
+- **Production** (`NODE_ENV === "production"`): only the **top-level** snapshot object is frozen (`Object.freeze`). Nested `context` is **caller-owned and not deeply frozen** — treat it as read-only by convention; the library does not enforce immutability of nested context in prod.
 
 ## Sub-machines
 
