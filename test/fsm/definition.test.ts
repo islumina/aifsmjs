@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   InvalidDefinitionError,
   createMachine,
@@ -7,6 +7,7 @@ import {
   setup,
 } from "../../src/fsm/definition.js";
 import { createRuntime } from "../../src/fsm/runtime.js";
+import type { MachineDef } from "../../src/fsm/types.js";
 import { assign } from "../../src/fsm/updater.js";
 
 describe("defineMachine", () => {
@@ -299,10 +300,9 @@ describe("setup() — curried builder with inferred States", () => {
   it("works end-to-end through createRuntime", () => {
     type Ctx = { n: number };
     type Evt = { type: "INC" };
-    // Explicit States generic: terminal state `b: {}` under-constrains the
-    // curried setup() inference and collapses the union; the inference path
-    // itself is covered by the sibling test above. Behaviour is identical.
-    const machine = defineMachine<Ctx, Evt, "a" | "b">({
+    // Terminal state `b: {}` targeted by a transition: States must still be
+    // inferred from the keys, not collapsed to the target literal (aifsmjs-13).
+    const machine = setup<Ctx, Evt>().defineMachine({
       id: "c",
       initial: "a",
       context: { n: 0 },
@@ -317,6 +317,41 @@ describe("setup() — curried builder with inferred States", () => {
     runtime.send({ type: "INC" });
     expect(runtime.getSnapshot().value).toBe("b");
     expect(runtime.getSnapshot().context.n).toBe(1);
+  });
+
+  it("infers States from keys when a transition targets a terminal state (aifsmjs-13)", () => {
+    type Ctx = { n: number };
+    type Evt = { type: "GO" };
+    const withFinal = setup<Ctx, Evt>().defineMachine({
+      id: "m",
+      initial: "a",
+      context: { n: 0 },
+      states: { a: { on: { GO: { target: "b" } } }, b: { final: true } },
+    });
+    const withEmpty = setup<Ctx, Evt>().defineMachine({
+      id: "m2",
+      initial: "a",
+      context: { n: 0 },
+      states: { a: { on: { GO: "b" } }, b: {} },
+    });
+    expectTypeOf(withFinal).toEqualTypeOf<MachineDef<Ctx, Evt, "a" | "b">>();
+    expectTypeOf(withEmpty).toEqualTypeOf<MachineDef<Ctx, Evt, "a" | "b">>();
+    expect(Object.keys(withFinal.states)).toEqual(["a", "b"]);
+    expect(Object.keys(withEmpty.states)).toEqual(["a", "b"]);
+  });
+
+  it("still rejects a transition target outside the inferred States", () => {
+    type Ctx = { n: number };
+    type Evt = { type: "GO" };
+    expect(() =>
+      setup<Ctx, Evt>().defineMachine({
+        id: "m",
+        initial: "a",
+        context: { n: 0 },
+        // @ts-expect-error "ghost" is not a declared state
+        states: { a: { on: { GO: { target: "ghost" } } }, b: {} },
+      }),
+    ).toThrow(/unknown state/);
   });
 
   it("still validates: rejects initial outside states", () => {
