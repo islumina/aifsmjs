@@ -1,8 +1,8 @@
-import { AsyncGuardError, UnknownGuardError, isThenable } from "../fsm/evaluator.js";
+import { AsyncGuardError, UnknownGuardError, isThenable, ownValue } from "../fsm/evaluator.js";
 import type { Guard, GuardArgs, GuardRef } from "../fsm/types.js";
 
 function resolveItem<Ctx, Evt>(item: GuardRef<Ctx, Evt>, args: GuardArgs<Ctx, Evt>): boolean {
-  const fn = typeof item === "function" ? item : args.guards?.[item];
+  const fn = typeof item === "function" ? item : ownValue(args.guards, item);
   if (!fn) throw new UnknownGuardError(item as string);
   const result = fn(args);
   // Mirror evalGuard's safety net: a guard that returns a thenable breaks

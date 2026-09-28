@@ -1,4 +1,4 @@
-import { isThenable } from "../fsm/evaluator.js";
+import { isThenable, ownValue } from "../fsm/evaluator.js";
 import type { Effect, EffectHandler } from "../fsm/types.js";
 
 // Lazily-built never-aborting signal for callers who don't supply one. Reused
@@ -33,7 +33,7 @@ export function runEffects<Ctx, Evt>(
   const handlerArgs = { context: args.context, event: args.event, signal };
   const promises: Promise<void>[] = [];
   for (const eff of effects) {
-    const h = handlers[eff.type];
+    const h = ownValue(handlers, eff.type);
     if (!h) continue;
     const r = h(eff, handlerArgs);
     // isThenable (not instanceof Promise) so cross-realm Promises and

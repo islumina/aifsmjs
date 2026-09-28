@@ -56,6 +56,19 @@ export function isThenable(x: unknown): x is PromiseLike<unknown> {
 }
 
 /**
+ * Own-property lookup for user-keyed maps (`on`, `guards`, `actions`,
+ * `effects`). A plain `map[key]` read resolves inherited `Object.prototype`
+ * members, so an undeclared event type or ref such as `"constructor"` or
+ * `"toString"` would act as a declared transition / implementation.
+ */
+export function ownValue<V>(
+  map: Readonly<Record<string, V>> | undefined,
+  key: string,
+): V | undefined {
+  return map !== undefined && Object.hasOwn(map, key) ? map[key] : undefined;
+}
+
+/**
  * Resolve a guard ref to a Guard function. String refs are looked up in the
  * implementations map; inline functions are returned as-is.
  */
@@ -64,7 +77,7 @@ export function resolveGuard<Ctx, Evt>(
   impl: Implementations<Ctx, Evt>,
 ): Guard<Ctx, Evt> {
   if (typeof ref === "function") return ref;
-  const fn = impl.guards?.[ref];
+  const fn = ownValue(impl.guards, ref);
   if (!fn) throw new UnknownGuardError(ref);
   return fn;
 }

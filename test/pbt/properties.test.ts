@@ -162,3 +162,12 @@ describe("guardsFalseNoTransition is non-vacuous (FSM-B-02)", () => {
     ).toThrow();
   });
 });
+
+describe("unknownEventNoOp — Object.prototype keys (aifsmjs-1)", () => {
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"])(
+    "passes for unknown type %s",
+    (t) => {
+      expect(() => unknownEventNoOp(trafficLight, makeImpl(), t, { numRuns: 5 })).not.toThrow();
+    },
+  );
+});

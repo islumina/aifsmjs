@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AsyncGuardError, evalGuard } from "../../src/fsm/evaluator.js";
+import { AsyncGuardError, UnknownGuardError, evalGuard } from "../../src/fsm/evaluator.js";
 import type { Guard, Implementations } from "../../src/fsm/types.js";
 import { and, not, or, stateIn } from "../../src/guards/index.js";
 
@@ -138,5 +138,14 @@ describe("stateIn", () => {
   it("returns false when value is undefined", () => {
     const g = stateIn<Ctx, Evt>("a");
     expect(g({ context: { n: 0 }, event: { type: "X" } })).toBe(false);
+  });
+});
+
+describe("and/or/not — Object.prototype refs (aifsmjs-1)", () => {
+  it("string ref 'constructor' is not resolved from the prototype", () => {
+    const g = and<Ctx, Evt>(["constructor"]);
+    expect(() => g({ context: { n: 1 }, event: { type: "X" }, guards: {} })).toThrow(
+      UnknownGuardError,
+    );
   });
 });

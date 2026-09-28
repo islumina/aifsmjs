@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { defineMachine } from "../../src/fsm/definition.js";
 import { RuntimeDisposedError, createRuntime } from "../../src/fsm/runtime.js";
 import { type EffectLog, makeImpl, trafficLight } from "../fixtures/traffic-light.js";
 
@@ -651,5 +652,36 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
     // A further transition must also be a no-op for this handler.
     runtime.send({ type: "NEXT" }); // green → yellow
     expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("runtime — Object.prototype keys are not declared (aifsmjs-1)", () => {
+  const machine = defineMachine<{ n: number }, { type: string }, "a" | "b">({
+    id: "proto-rt",
+    initial: "a",
+    context: { n: 0 },
+    states: { a: { on: { GO: { target: "b", actions: ["fx"] } } }, b: {} },
+  });
+
+  it("send({ type: 'constructor' }) neither notifies nor emits 'transition'", () => {
+    const runtime = createRuntime(machine, { actions: { fx: () => {} } });
+    const seen: string[] = [];
+    runtime.subscribe((s) => seen.push(s.value));
+    runtime.on("transition", () => seen.push("transition"));
+    runtime.send({ type: "constructor" });
+    expect(seen).toEqual([]);
+  });
+
+  it("can({ type: 'toString' }) is false", () => {
+    expect(createRuntime(machine, {}).can({ type: "toString" })).toBe(false);
+  });
+
+  it("an effect typed 'valueOf' with no own handler is skipped", () => {
+    const runtime = createRuntime(machine, {
+      actions: { fx: ({ enqueue }) => enqueue.effect("valueOf") },
+      effects: {},
+    });
+    expect(() => runtime.send({ type: "GO" })).not.toThrow();
+    expect(runtime.getSnapshot().value).toBe("b");
   });
 });

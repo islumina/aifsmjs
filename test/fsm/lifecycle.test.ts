@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { defineMachine, initialSnapshot } from "../../src/fsm/definition.js";
+import { UnknownGuardError } from "../../src/fsm/evaluator.js";
 import { UnknownActionError, step } from "../../src/fsm/lifecycle.js";
+import { resolveTransitions } from "../../src/fsm/resolver.js";
 import type { Implementations } from "../../src/fsm/types.js";
 import { assign } from "../../src/fsm/updater.js";
 import { type Ctx, type Evt, makeImpl, trafficLight } from "../fixtures/traffic-light.js";
@@ -239,5 +241,53 @@ describe("step — happy path", () => {
     const impl = makeImpl();
     const r = step(trafficLight, initialSnapshot(trafficLight), { type: "NEXT" }, impl);
     expect(Object.isFrozen(r.snapshot)).toBe(true);
+  });
+});
+
+describe("step — Object.prototype keys are not declared (aifsmjs-1)", () => {
+  type PCtx = { n: number };
+  type PEvt = { type: string };
+  const PROTO_KEYS = ["toString", "constructor", "__proto__", "hasOwnProperty", "valueOf"];
+  const machine = defineMachine<PCtx, PEvt, "a" | "b">({
+    id: "proto",
+    initial: "a",
+    context: { n: 0 },
+    states: { a: { on: { GO: { target: "b" } } }, b: {} },
+  });
+
+  it.each(PROTO_KEYS)("undeclared event type %s is a no-op", (type) => {
+    const initial = initialSnapshot(machine);
+    const r = step(machine, initial, { type }, {});
+    expect(r.changed).toBe(false);
+    expect(r.snapshot).toBe(initial);
+    expect(r.effects).toEqual([]);
+  });
+
+  it("guard ref 'constructor' throws UnknownGuardError", () => {
+    const g = defineMachine<PCtx, PEvt, "a" | "b">({
+      id: "proto-guard",
+      initial: "a",
+      context: { n: 0 },
+      states: { a: { on: { GO: { target: "b", guard: "constructor" } } }, b: {} },
+    });
+    expect(() => step(g, initialSnapshot(g), { type: "GO" }, { guards: {} })).toThrow(
+      UnknownGuardError,
+    );
+  });
+
+  it("action ref 'toString' throws UnknownActionError", () => {
+    const a = defineMachine<PCtx, PEvt, "a" | "b">({
+      id: "proto-action",
+      initial: "a",
+      context: { n: 0 },
+      states: { a: { on: { GO: { target: "b", actions: ["toString"] } } }, b: {} },
+    });
+    expect(() => step(a, initialSnapshot(a), { type: "GO" }, { actions: {} })).toThrow(
+      UnknownActionError,
+    );
+  });
+
+  it("resolveTransitions ignores inherited keys", () => {
+    expect(resolveTransitions(machine, "a", "toString")).toEqual([]);
   });
 });

@@ -1,5 +1,5 @@
 import { initialSnapshot } from "./definition.js";
-import { evalGuard, isThenable } from "./evaluator.js";
+import { evalGuard, isThenable, ownValue } from "./evaluator.js";
 import { step } from "./lifecycle.js";
 import { normalizeTransitions } from "./resolver.js";
 import { deepFreeze } from "./snapshot.js";
@@ -137,7 +137,7 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
   function dispatchEffects(effects: readonly Effect[], context: Ctx, event: Evt): void {
     if (!impl.effects || effects.length === 0) return;
     for (const eff of effects) {
-      const handler = impl.effects[eff.type];
+      const handler = ownValue(impl.effects, eff.type);
       if (!handler) continue;
       const r = handler(eff, { context, event, signal: controller.signal });
       // isThenable (not instanceof Promise) so cross-realm Promises and
@@ -210,7 +210,7 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
   function findChosenIsExternal(value: States, event: Evt, context: Ctx): boolean {
     const state = def.states[value];
     if (!state?.on) return false;
-    const list = normalizeTransitions(state.on[event.type]);
+    const list = normalizeTransitions(ownValue(state.on, event.type));
     if (list.length === 0) return false;
     for (const t of list) {
       if (!t.guard || evalGuard(t.guard, context, event, impl, value)) {
@@ -321,7 +321,7 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     const state = def.states[snapshot.value];
     /* v8 ignore next — defensive: snapshot.value always corresponds to a declared state. */
     if (!state) return false;
-    const list = normalizeTransitions(state.on?.[event.type]);
+    const list = normalizeTransitions(ownValue(state.on, event.type));
     if (list.length === 0) return false;
     for (const t of list) {
       if (!t.guard) return true;

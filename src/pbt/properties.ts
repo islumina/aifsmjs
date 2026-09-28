@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import * as fc from "fast-check";
 import { initialSnapshot } from "../fsm/definition.js";
+import { ownValue } from "../fsm/evaluator.js";
 import { step } from "../fsm/lifecycle.js";
 import { normalizeTransitions } from "../fsm/resolver.js";
 import { createRuntime } from "../fsm/runtime.js";
@@ -159,10 +160,17 @@ export function guardsFalseNoTransition<Ctx, Evt extends { type: string }, State
   eventArbitraries: EventArbitraries<Evt>,
   opts?: AssertOpts,
 ): void {
+  // Every key reads as an own property: step() resolves guard refs with an
+  // own-key lookup, so a `get` trap alone would surface as UnknownGuardError.
   const blockedGuards = new Proxy(
     {},
     {
       get: () => () => false,
+      getOwnPropertyDescriptor: () => ({
+        configurable: true,
+        enumerable: true,
+        value: () => false,
+      }),
     },
   ) as Readonly<Record<string, Guard<Ctx, Evt>>>;
   const blockedImpl: Implementations<Ctx, Evt> = {
@@ -173,7 +181,7 @@ export function guardsFalseNoTransition<Ctx, Evt extends { type: string }, State
   // guard — i.e. blocking all guards leaves no unconditional fallback, so a
   // correct step() must report changed === false.
   const isFullyGuarded = (value: States, eventType: string): boolean => {
-    const candidates = normalizeTransitions(def.states[value]?.on?.[eventType]);
+    const candidates = normalizeTransitions(ownValue(def.states[value]?.on, eventType));
     return candidates.length > 0 && candidates.every((t) => t.guard !== undefined);
   };
   fc.assert(
