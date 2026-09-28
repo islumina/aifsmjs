@@ -10,7 +10,7 @@
 // aiecsjs/scripts/check-size.mjs: BFS over relative imports from each entry,
 // sum per-file gzip sizes over the reachable set, and budget that closure.
 // Closure totals are comparable to the pre-split inlined sizes the budgets
-// below were calibrated against (and which README.md documents).
+// below were calibrated against.
 //
 // ESM-ONLY SCOPE: only `dist/**/*.js` is measured; the `.cjs` twins share the
 // same logic and would double-count the shared chunks.
@@ -31,7 +31,8 @@ const budgets = {
   // change. Leader-measured actuals: index 6,149 / guards 1,325 /
   // effects 1,521 / inspect 550 / replay 3,008 / pbt 8,061 / timer 1,023 B.
   // Historical inlined calibration (pre-split): index 4,465 B and pbt 5,228 B
-  // measured in v0.3.0. README "Size budget" bullet mirrors these caps.
+  // measured in v0.3.0. These are this script's own source of truth — they
+  // are not mirrored anywhere else (README carries no size-budget bullet).
   "dist/index.js": 6_500,
   "dist/guards/index.js": 1_500,
   "dist/effects/index.js": 1_700,
