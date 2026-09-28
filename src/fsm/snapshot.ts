@@ -1,9 +1,18 @@
 import type { Snapshot } from "./types.js";
 
-const IS_DEV =
-  typeof process !== "undefined" &&
-  typeof process.env !== "undefined" &&
-  process.env.NODE_ENV !== "production";
+// Written so a bundler define-replacement of `process.env.NODE_ENV` (Vite,
+// webpack 5, ...) still applies: those tools replace only the
+// `process.env.NODE_ENV` expression, not a runtime `process` global, so
+// gating on `typeof process !== "undefined"` first left IS_DEV permanently
+// false in a browser build even though NODE_ENV !== "production". A plain
+// try/catch around the read lets the replaced literal survive while still
+// falling back to false wherever `process` is entirely absent.
+let IS_DEV = false;
+try {
+  IS_DEV = process.env.NODE_ENV !== "production";
+} catch {
+  /* no `process` global (browser without bundler define-replacement) */
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object") return false;
