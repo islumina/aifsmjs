@@ -10,7 +10,8 @@ All notable changes to aifsmjs are summarized here.
 - Fixed: runtime event listeners are isolated per-listener — a throwing `'dispose'` or `'error'` listener no longer prevents later listeners for the same event from running.
 - Fixed: `assignDoesNotMutate` detects mutation by a structural fingerprint instead of `structuredClone`, so it no longer false-fails for a pure machine whose context holds a class instance or a callback.
 - Fixed: `setup().defineMachine()` infers `States` from `keyof states` only, so a terminal state written as `{}` or `{ final: true }` no longer collapses the inferred state union.
-- Fixed: an async effect handler's rejection now surfaces as a normal `unhandledRejection` when no `'error'` listener can observe it (including after `dispose()` cleared the listeners), instead of disappearing silently.
+- Fixed: an explicit `context: undefined` passed to `defineMachine` / `setup().defineMachine` now defaults to `{}`, the same as an absent `context` key.
+- Fixed: dev-mode detection reads `process.env.NODE_ENV` directly, so Vite / webpack 5 define-replacement enables dev-only deep-freezing in browser builds that have no `process` global.
 - Fixed: the PBT `snapshotAlwaysFrozen` and `reachableStatesSubsetDeclared` properties no longer dispatch real effects while driving generated commands through a runtime.
 - Fixed: `createScheduler().after()` merges `signal`/`setTimeout`/`clearTimeout` field-by-field with `??` instead of an object spread, so an explicitly-undefined per-call option no longer silently overrides the scheduler's default.
 - Fixed: `MachineConfig`, the parameter type of `defineMachine`, is re-exported from the package root.
