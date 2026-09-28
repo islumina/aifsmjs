@@ -685,3 +685,76 @@ describe("runtime — Object.prototype keys are not declared (aifsmjs-1)", () =>
     expect(runtime.getSnapshot().value).toBe("b");
   });
 });
+
+describe("runtime events — per-listener isolation (aifsmjs-6)", () => {
+  type ECtx = { n: number };
+  type EEvt = { type: "GO" };
+  const machine = defineMachine<ECtx, EEvt, "a" | "b">({
+    id: "emit",
+    initial: "a",
+    context: { n: 0 },
+    states: { a: { on: { GO: { target: "b", actions: ["fx"] } } }, b: {} },
+  });
+
+  it("a throwing 'dispose' listener does not prevent later 'dispose' listeners", () => {
+    const runtime = createRuntime(machine, {});
+    const calls: string[] = [];
+    runtime.on("dispose", () => {
+      calls.push("first");
+      throw new Error("boom");
+    });
+    runtime.on("dispose", () => calls.push("second"));
+    expect(() => runtime.dispose()).not.toThrow();
+    expect(calls).toEqual(["first", "second"]);
+  });
+
+  it("a throwing 'error' listener does not skip later ones; its error still surfaces", async () => {
+    const runtime = createRuntime(machine, {
+      actions: {
+        fx: ({ enqueue }) => {
+          enqueue.effect("boomAsync");
+        },
+      },
+      effects: {
+        boomAsync: async () => {
+          throw new Error("effect-rejected");
+        },
+      },
+    });
+    const calls: string[] = [];
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      runtime.on("error", () => {
+        calls.push("first");
+        throw new Error("listener-threw");
+      });
+      runtime.on("error", () => calls.push("second"));
+      runtime.send({ type: "GO" });
+      await new Promise((r) => setTimeout(r, 10));
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+    expect(calls).toEqual(["first", "second"]);
+    expect((unhandled[0] as Error).message).toBe("listener-threw");
+  });
+
+  it("throwing 'transition' listeners still let later ones run before send() rethrows the first", () => {
+    const runtime = createRuntime(machine, { actions: { fx: () => {} } });
+    const calls: string[] = [];
+    runtime.on("transition", () => {
+      calls.push("first");
+      throw new Error("t-boom");
+    });
+    runtime.on("transition", () => {
+      calls.push("second");
+      throw new Error("t-boom-2");
+    });
+    runtime.on("transition", () => calls.push("third"));
+    // The first error wins; later listeners still run.
+    expect(() => runtime.send({ type: "GO" })).toThrow("t-boom");
+    expect(calls).toEqual(["first", "second", "third"]);
+    expect(runtime.getSnapshot().value).toBe("b");
+  });
+});
