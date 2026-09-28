@@ -116,19 +116,18 @@ export function defineMachine<
   Evt extends { type: string } = { type: string },
   States extends string = string,
 >(def: MachineConfig<Ctx, Evt, States>): MachineDef<Ctx, Evt, States> {
-  const normalized = (!("context" in def) ? { ...def, context: {} as Ctx } : def) as MachineDef<
-    Ctx,
-    Evt,
-    States
-  >;
+  const normalized = (
+    def.context === undefined ? { ...def, context: {} as Ctx } : def
+  ) as MachineDef<Ctx, Evt, States>;
   validateDefinition(normalized);
   return normalized;
 }
 
 /**
  * Curried builder so `States` can be inferred from `keyof states` without
- * `initial` collapsing it to a single literal. Pass `Ctx` and `Evt` as the
- * type arguments; pass the def to the returned `defineMachine`.
+ * `initial` or a transition `target` collapsing it to a single literal. Pass
+ * `Ctx` and `Evt` as the type arguments; pass the def to the returned
+ * `defineMachine`.
  *
  *   const machine = setup<MyCtx, MyEvt>().defineMachine({
  *     id: "m",
@@ -145,7 +144,7 @@ export function setup<
     def: Readonly<{
       id: string;
       initial: NoInfer<States>;
-      states: Readonly<Record<States, StateDef<Ctx, Evt, States>>>;
+      states: Readonly<{ [K in States]: StateDef<Ctx, Evt, NoInfer<States>> }>;
     }> &
       (Record<string, never> extends Ctx ? { readonly context?: Ctx } : { readonly context: Ctx }),
   ) => MachineDef<Ctx, Evt, States>;
@@ -155,13 +154,13 @@ export function setup<
       def: Readonly<{
         id: string;
         initial: NoInfer<States>;
-        states: Readonly<Record<States, StateDef<Ctx, Evt, States>>>;
+        states: Readonly<{ [K in States]: StateDef<Ctx, Evt, NoInfer<States>> }>;
       }> &
         (Record<string, never> extends Ctx
           ? { readonly context?: Ctx }
           : { readonly context: Ctx }),
     ) => {
-      const cast = (!("context" in def)
+      const cast = (def.context === undefined
         ? { ...def, context: {} as Ctx }
         : def) as unknown as MachineDef<Ctx, Evt, States>;
       validateDefinition(cast);

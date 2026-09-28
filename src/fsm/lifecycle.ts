@@ -1,5 +1,5 @@
 import { createEnqueuer } from "../effects/enqueuer.js";
-import { evalGuard } from "./evaluator.js";
+import { evalGuard, ownValue } from "./evaluator.js";
 import { normalizeTransitions } from "./resolver.js";
 import { freezeSnapshot } from "./snapshot.js";
 import type {
@@ -28,7 +28,7 @@ function resolveAction<Ctx, Evt>(
   impl: Implementations<Ctx, Evt>,
 ): Action<Ctx, Evt> {
   if (typeof ref === "function") return ref;
-  const fn = impl.actions?.[ref];
+  const fn = ownValue(impl.actions, ref);
   if (!fn) throw new UnknownActionError(ref);
   return fn;
 }
@@ -95,7 +95,7 @@ export function step<Ctx, Evt extends { type: string }, States extends string>(
     return Object.freeze({ snapshot, effects: [] as readonly Effect[], changed: false });
   }
 
-  const candidateList = normalizeTransitions(state.on?.[event.type]);
+  const candidateList = normalizeTransitions(ownValue(state.on, event.type));
 
   const chosen = pickTransition(candidateList, snapshot.context, event, impl, snapshot.value);
   if (!chosen) {

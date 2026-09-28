@@ -8,6 +8,7 @@ export type {
   GuardArgs,
   GuardRef,
   Implementations,
+  MachineConfig,
   MachineDef,
   Middleware,
   MiddlewareContext,

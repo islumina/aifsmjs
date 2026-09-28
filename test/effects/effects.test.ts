@@ -120,3 +120,10 @@ describe("runEffects", () => {
     expect(received?.aborted).toBe(false);
   });
 });
+
+describe("runEffects — Object.prototype keys (aifsmjs-1)", () => {
+  it("skips an effect whose type is only an inherited key", () => {
+    const handlers: Record<string, EffectHandler<null, object>> = {};
+    expect(runEffects([{ type: "valueOf" }], handlers, { context: null, event: {} })).toEqual([]);
+  });
+});

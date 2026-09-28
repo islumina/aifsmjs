@@ -1,5 +1,5 @@
 import { initialSnapshot } from "./definition.js";
-import { evalGuard, isThenable } from "./evaluator.js";
+import { evalGuard, isThenable, ownValue } from "./evaluator.js";
 import { step } from "./lifecycle.js";
 import { normalizeTransitions } from "./resolver.js";
 import { deepFreeze } from "./snapshot.js";
@@ -115,7 +115,22 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     // listener that subscribes/unsubscribes another during dispatch must not
     // mutate the set being walked. One array alloc per emit, matching the
     // family's accepted cost (FAM-S-03).
-    for (const fn of Array.from(eventListeners[type])) fn(payload);
+    // Per-listener isolation: a throwing listener must not skip the ones after
+    // it (a 'dispose' cleanup hook would leak). The first error is rethrown
+    // once every listener has run, so it still surfaces to the caller.
+    let failed = false;
+    let firstError: unknown;
+    for (const fn of Array.from(eventListeners[type])) {
+      try {
+        fn(payload);
+      } catch (err) {
+        if (!failed) {
+          failed = true;
+          firstError = err;
+        }
+      }
+    }
+    if (failed) throw firstError;
   }
 
   function notify(committed?: Snapshot<Ctx, States>) {
@@ -131,13 +146,25 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     changed: boolean,
   ) {
     if (!middlewareChain) return;
-    middlewareChain(deepFreeze({ prev, next: snapshot, event, effects, changed }), () => {});
+    // prev/next are already frozen to the NODE_ENV depth (STABILITY.md), so
+    // only event and effects are deep-frozen here; deep-freezing the snapshots
+    // would freeze caller-owned nested context in production.
+    middlewareChain(
+      Object.freeze({
+        prev,
+        next: snapshot,
+        event: deepFreeze(event),
+        effects: deepFreeze(effects),
+        changed,
+      }),
+      () => {},
+    );
   }
 
   function dispatchEffects(effects: readonly Effect[], context: Ctx, event: Evt): void {
     if (!impl.effects || effects.length === 0) return;
     for (const eff of effects) {
-      const handler = impl.effects[eff.type];
+      const handler = ownValue(impl.effects, eff.type);
       if (!handler) continue;
       const r = handler(eff, { context, event, signal: controller.signal });
       // isThenable (not instanceof Promise) so cross-realm Promises and
@@ -210,7 +237,7 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
   function findChosenIsExternal(value: States, event: Evt, context: Ctx): boolean {
     const state = def.states[value];
     if (!state?.on) return false;
-    const list = normalizeTransitions(state.on[event.type]);
+    const list = normalizeTransitions(ownValue(state.on, event.type));
     if (list.length === 0) return false;
     for (const t of list) {
       if (!t.guard || evalGuard(t.guard, context, event, impl, value)) {
@@ -321,7 +348,7 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     const state = def.states[snapshot.value];
     /* v8 ignore next — defensive: snapshot.value always corresponds to a declared state. */
     if (!state) return false;
-    const list = normalizeTransitions(state.on?.[event.type]);
+    const list = normalizeTransitions(ownValue(state.on, event.type));
     if (list.length === 0) return false;
     for (const t of list) {
       if (!t.guard) return true;

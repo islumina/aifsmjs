@@ -1,9 +1,18 @@
 import type { Snapshot } from "./types.js";
 
-const IS_DEV =
-  typeof process !== "undefined" &&
-  typeof process.env !== "undefined" &&
-  process.env.NODE_ENV !== "production";
+// Written so a bundler define-replacement of `process.env.NODE_ENV` (Vite,
+// webpack 5, ...) still applies: those tools replace only the
+// `process.env.NODE_ENV` expression, not a runtime `process` global, so
+// gating on `typeof process !== "undefined"` first left IS_DEV permanently
+// false in a browser build even though NODE_ENV !== "production". A plain
+// try/catch around the read lets the replaced literal survive while still
+// falling back to false wherever `process` is entirely absent.
+let IS_DEV = false;
+try {
+  IS_DEV = process.env.NODE_ENV !== "production";
+} catch {
+  /* no `process` global (browser without bundler define-replacement) */
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object") return false;
@@ -11,9 +20,18 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
+// Trees already deep-frozen here. Short-circuits re-walking carried-over
+// context and guards cycles; unlike `Object.isFrozen` it does not stop at a
+// shallow-frozen object (e.g. an effect descriptor) whose children are mutable.
+const DEEP_FROZEN = new WeakSet<object>();
+
 export function deepFreeze<T>(value: T): T {
   if (value === null || typeof value !== "object") return value;
-  if (Object.isFrozen(value)) return value;
+  if (DEEP_FROZEN.has(value)) return value;
+  DEEP_FROZEN.add(value);
+  // Object.freeze throws on a non-empty TypedArray / Buffer; binary data in
+  // context or event payloads is left mutable (caller-owned) instead.
+  if (ArrayBuffer.isView(value)) return value;
   Object.freeze(value);
   if (Array.isArray(value)) {
     for (const item of value) deepFreeze(item);

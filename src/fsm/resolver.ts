@@ -1,3 +1,4 @@
+import { ownValue } from "./evaluator.js";
 import type { MachineDef, TransitionConfig, TransitionDef } from "./types.js";
 
 /**
@@ -52,5 +53,5 @@ export function resolveTransitions<Ctx, Evt extends { type: string }, States ext
 ): readonly TransitionDef<Ctx, Evt, States>[] {
   const state = def.states[stateValue];
   if (!state || !state.on) return [];
-  return normalizeTransitions(state.on[eventType]);
+  return normalizeTransitions(ownValue(state.on, eventType));
 }

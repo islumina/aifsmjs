@@ -49,7 +49,7 @@ console.log(runtime.getSnapshot().value); // "green"
 | --- | --- |
 | `aifsmjs` | `setup`、`defineMachine`、`createRuntime`、`createMachine`、`step`、`assign`、snapshots、runtime/errors/types。 |
 | `aifsmjs/guards` | `and`、`or`、`not`、`stateIn`。Guard 必須同步。 |
-| `aifsmjs/effects` | `enqueue.effect()` descriptor 與 `runEffects()`。 |
+| `aifsmjs/effects` | `createEnqueuer()` 與 `runEffects()`。 |
 | `aifsmjs/inspect` | Read-only middleware helpers：`logger`、`persist`、`recorder`。 |
 | `aifsmjs/replay` | 純 event-log replay。 |
 | `aifsmjs/pbt` | fast-check property helpers。 |
