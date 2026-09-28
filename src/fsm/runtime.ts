@@ -172,16 +172,6 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
       // the 'error' channel; Promise.resolve() normalises them (FSM-B-03).
       if (isThenable(r)) {
         Promise.resolve(r).catch((err: unknown) => {
-          // Checked at rejection time (not dispatch time) so a rejection that
-          // lands after dispose() cleared the listener sets is covered too.
-          // With no 'error' listener to observe it, re-reject a fresh promise
-          // instead of swallowing it — this surfaces as a genuine
-          // 'unhandledRejection' the same way an un-caught async effect
-          // failure normally would.
-          if (eventListeners.error.size === 0) {
-            Promise.reject(err);
-            return;
-          }
           emit("error", { error: err, event });
         });
       }

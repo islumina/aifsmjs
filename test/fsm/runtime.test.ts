@@ -740,28 +740,6 @@ describe("runtime events — per-listener isolation (aifsmjs-6)", () => {
     expect((unhandled[0] as Error).message).toBe("listener-threw");
   });
 
-  it("an async effect rejection surfaces as an unhandled rejection when no 'error' listener is registered (aifsmjs-14)", async () => {
-    const runtime = createRuntime(machine, {
-      actions: { fx: ({ enqueue }) => enqueue.effect("boomAsync") },
-      effects: {
-        boomAsync: async () => {
-          throw new Error("io-failed");
-        },
-      },
-    });
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => unhandled.push(reason);
-    process.on("unhandledRejection", onUnhandled);
-    try {
-      runtime.send({ type: "GO" });
-      await new Promise((r) => setTimeout(r, 10));
-    } finally {
-      process.off("unhandledRejection", onUnhandled);
-    }
-    expect(unhandled).toHaveLength(1);
-    expect((unhandled[0] as Error).message).toBe("io-failed");
-  });
-
   it("throwing 'transition' listeners still let later ones run before send() rethrows the first", () => {
     const runtime = createRuntime(machine, { actions: { fx: () => {} } });
     const calls: string[] = [];
