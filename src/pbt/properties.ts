@@ -160,16 +160,13 @@ export function guardsFalseNoTransition<Ctx, Evt extends { type: string }, State
   opts?: AssertOpts,
 ): void {
   // Every key reads as an own property: step() resolves guard refs with an
-  // own-key lookup, so a `get` trap alone would surface as UnknownGuardError.
+  // own-key lookup (the value itself still comes from `get`), so a `get` trap
+  // alone would surface as UnknownGuardError.
   const blockedGuards = new Proxy(
     {},
     {
       get: () => () => false,
-      getOwnPropertyDescriptor: () => ({
-        configurable: true,
-        enumerable: true,
-        value: () => false,
-      }),
+      getOwnPropertyDescriptor: () => ({ configurable: true }),
     },
   ) as Readonly<Record<string, Guard<Ctx, Evt>>>;
   const blockedImpl: Implementations<Ctx, Evt> = {
