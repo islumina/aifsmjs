@@ -2,6 +2,7 @@ import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { defineMachine } from "../../src/fsm/definition.js";
 import type { Implementations } from "../../src/fsm/types.js";
+import { assign } from "../../src/fsm/updater.js";
 import {
   assertAll,
   assignDoesNotMutate,
@@ -170,4 +171,95 @@ describe("unknownEventNoOp — Object.prototype keys (aifsmjs-1)", () => {
       expect(() => unknownEventNoOp(trafficLight, makeImpl(), t, { numRuns: 5 })).not.toThrow();
     },
   );
+});
+
+describe("assignDoesNotMutate — non-cloneable context (aifsmjs-12)", () => {
+  class Vec {
+    constructor(
+      public x = 0,
+      public y = 0,
+      public inner: { z: number } = { z: 0 },
+    ) {}
+  }
+
+  it("passes for a pure machine whose context holds a class instance", () => {
+    type VCtx = { pos: Vec };
+    type VEvt = { type: "MOVE" };
+    const def = defineMachine<VCtx, VEvt, "a">({
+      id: "vec",
+      initial: "a",
+      context: { pos: new Vec(1, 2) },
+      states: {
+        a: {
+          on: {
+            MOVE: {
+              actions: [
+                assign(({ context }) => ({ pos: new Vec(context.pos.x + 1, context.pos.y) })),
+              ],
+            },
+          },
+        },
+      },
+    });
+    const arbs = { MOVE: fc.constant({ type: "MOVE" } as VEvt) };
+    expect(() => assignDoesNotMutate(def, {}, arbs, { numRuns: 10 })).not.toThrow();
+  });
+
+  it("passes for a pure machine whose context holds a callback", () => {
+    type CCtx = { cb: () => void; n: number };
+    type CEvt = { type: "INC" };
+    const def = defineMachine<CCtx, CEvt, "a">({
+      id: "cb",
+      initial: "a",
+      context: { cb: () => {}, n: 0 },
+      states: {
+        a: { on: { INC: { actions: [assign(({ context }) => ({ n: context.n + 1 }))] } } },
+      },
+    });
+    const arbs = { INC: fc.constant({ type: "INC" } as CEvt) };
+    expect(() => assignDoesNotMutate(def, {}, arbs, { numRuns: 10 })).not.toThrow();
+  });
+
+  it("still FAILS when an action mutates nested state in place", () => {
+    // deepFreeze does not recurse into class instances, so `inner` stays
+    // mutable even in dev and the in-place write reaches the oracle.
+    type MCtx = { pos: Vec; m: Map<string, number> };
+    type MEvt = { type: "BUMP" } | { type: "PUT" };
+    const def = defineMachine<MCtx, MEvt, "a">({
+      id: "mut",
+      initial: "a",
+      context: { pos: new Vec(), m: new Map() },
+      states: {
+        a: {
+          on: {
+            BUMP: {
+              actions: [
+                ({ context }) => {
+                  context.pos.inner.z++;
+                },
+              ],
+            },
+            PUT: {
+              actions: [
+                ({ context }) => {
+                  context.m.set("k", context.m.size);
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(() =>
+      assignDoesNotMutate(
+        def,
+        {},
+        { BUMP: fc.constant({ type: "BUMP" } as MEvt) },
+        { numRuns: 10 },
+      ),
+    ).toThrow();
+    expect(() =>
+      assignDoesNotMutate(def, {}, { PUT: fc.constant({ type: "PUT" } as MEvt) }, { numRuns: 10 }),
+    ).toThrow();
+  });
 });

@@ -6,7 +6,6 @@ import { step } from "../fsm/lifecycle.js";
 import { normalizeTransitions } from "../fsm/resolver.js";
 import { createRuntime } from "../fsm/runtime.js";
 import type { Guard, Implementations, MachineDef } from "../fsm/types.js";
-import { mergeContext } from "../fsm/updater.js";
 import { replay } from "../replay/index.js";
 import {
   type EventArbitraries,
@@ -205,10 +204,17 @@ export function guardsFalseNoTransition<Ctx, Evt extends { type: string }, State
   );
 }
 
+// Own keys/values of one object, plus Map/Set entries and Date time.
+const ownState = (v: object): unknown[] => [
+  ...Reflect.ownKeys(v).flatMap((k) => [k, (v as Record<PropertyKey, unknown>)[k]]),
+  ...(v instanceof Map || v instanceof Set ? [...v.entries()].flat() : []),
+  v instanceof Date && v.getTime(),
+];
+
 /**
  * #6 assignDoesNotMutate — running an `assign`-style action never mutates the
- * previous context object. Verified by deep-equality check on a snapshot taken
- * before each event.
+ * previous context object. Verified by re-checking the own state of every
+ * object reachable from the pre-step context.
  */
 export function assignDoesNotMutate<Ctx, Evt extends { type: string }, States extends string>(
   def: MachineDef<Ctx, Evt, States>,
@@ -216,29 +222,24 @@ export function assignDoesNotMutate<Ctx, Evt extends { type: string }, States ex
   eventArbitraries: EventArbitraries<Evt>,
   opts?: AssertOpts,
 ): void {
-  // Quick sanity guard: mergeContext is the only context mutator used by step.
-  const dummy = { a: 1, b: 2 };
-  const merged = mergeContext(dummy, { b: 3 });
-  /* v8 ignore next — invariant guard; mergeContext returning the same ref would mean unit tests have already broken. */
-  if (merged === dummy) throw new Error("aifsmjs/pbt: mergeContext returned the same reference");
-
   fc.assert(
     fc.property(
       fc.array(fc.oneof(...Object.values(eventArbitraries)), { maxLength: 16 }),
       (events) => {
         let snap = initialSnapshot(def);
         for (const e of events) {
-          // Structural snapshot of the pre-step context (C3). structuredClone +
-          // contextEquals replaces the old JSON.stringify round-trip, which was
-          // lossy for Map/Set/Date and threw on BigInt. structuredClone produces
-          // an independent copy so a subsequent in-place mutation by step() is
-          // detectable by deep comparison.
-          const beforeCtx = structuredClone(snap.context);
-          step(def, snap, e, impl);
-          /* v8 ignore next — property failure branch; step() mutating snap.context would indicate a bug. */
-          if (!contextEquals(snap.context, beforeCtx)) return false;
-          // Continue with the actual result for subsequent events
+          // Record, not clone (clones drop prototypes, throw on functions).
+          const before = new Map<object, unknown[]>();
+          const walk = (v: unknown): void => {
+            if (!v || typeof v !== "object" || before.has(v)) return;
+            const own = ownState(v);
+            before.set(v, own);
+            own.forEach(walk);
+          };
+          walk(snap.context);
+          // `before` keeps the pre-step objects, so advancing `snap` first is safe.
           snap = step(def, snap, e, impl).snapshot;
+          for (const [obj, own] of before) if (!contextEquals(ownState(obj), own)) return false;
         }
         return true;
       },
