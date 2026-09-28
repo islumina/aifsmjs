@@ -14,6 +14,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 export function deepFreeze<T>(value: T): T {
   if (value === null || typeof value !== "object") return value;
   if (Object.isFrozen(value)) return value;
+  // Object.freeze throws on a non-empty TypedArray / Buffer; binary data in
+  // context or event payloads is left mutable (caller-owned) instead.
+  if (ArrayBuffer.isView(value)) return value;
   Object.freeze(value);
   if (Array.isArray(value)) {
     for (const item of value) deepFreeze(item);
