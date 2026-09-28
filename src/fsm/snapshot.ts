@@ -11,9 +11,15 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
+// Trees already deep-frozen here. Short-circuits re-walking carried-over
+// context and guards cycles; unlike `Object.isFrozen` it does not stop at a
+// shallow-frozen object (e.g. an effect descriptor) whose children are mutable.
+const DEEP_FROZEN = new WeakSet<object>();
+
 export function deepFreeze<T>(value: T): T {
   if (value === null || typeof value !== "object") return value;
-  if (Object.isFrozen(value)) return value;
+  if (DEEP_FROZEN.has(value)) return value;
+  DEEP_FROZEN.add(value);
   // Object.freeze throws on a non-empty TypedArray / Buffer; binary data in
   // context or event payloads is left mutable (caller-owned) instead.
   if (ArrayBuffer.isView(value)) return value;

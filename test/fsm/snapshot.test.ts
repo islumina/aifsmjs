@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { defineMachine } from "../../src/fsm/definition.js";
 import { createRuntime } from "../../src/fsm/runtime.js";
 import { createSnapshot, deepFreeze } from "../../src/fsm/snapshot.js";
+import type { Implementations } from "../../src/fsm/types.js";
 import { logger } from "../../src/inspect/index.js";
 
 describe("snapshot helpers", () => {
@@ -72,5 +73,80 @@ describe("deepFreeze — binary data (aifsmjs-2)", () => {
     expect(() => rt.send({ type: "DATA", bytes: new Uint8Array(3) })).not.toThrow();
     expect(rt.getSnapshot().value).toBe("b");
     expect(seen).toEqual(["b"]);
+  });
+});
+
+describe("deepFreeze — shallow-frozen inputs (aifsmjs-5)", () => {
+  it("recurses into an object that is already frozen at the top level", () => {
+    const root = Object.freeze({ items: [1, 2], nested: { n: 1 } });
+    deepFreeze(root);
+    expect(Object.isFrozen(root.items)).toBe(true);
+    expect(Object.isFrozen(root.nested)).toBe(true);
+  });
+
+  it.skipIf(process.env.NODE_ENV === "production")(
+    "dev: createSnapshot deep-freezes a shallow-frozen context",
+    () => {
+      const s = createSnapshot({ value: "a", context: Object.freeze({ items: [1, 2] }) });
+      expect(Object.isFrozen(s.context.items)).toBe(true);
+    },
+  );
+
+  it("terminates on cyclic plain objects", () => {
+    const a: { self?: unknown; b: { back?: unknown } } = { b: {} };
+    a.self = a;
+    a.b.back = a;
+    expect(deepFreeze(a)).toBe(a);
+    expect(Object.isFrozen(a.b)).toBe(true);
+  });
+
+  it("middleware cannot mutate an effect payload; the handler sees the original", () => {
+    type PCtx = { n: number };
+    type PEvt = { type: "PAY" };
+    const def = defineMachine<PCtx, PEvt, "a" | "b">({
+      id: "pay",
+      initial: "a",
+      context: { n: 0 },
+      states: { a: { on: { PAY: { target: "b", actions: ["charge"] } } }, b: {} },
+    });
+    const received: number[] = [];
+    const impl: Implementations<PCtx, PEvt> = {
+      actions: {
+        charge: ({ enqueue }) => {
+          enqueue.effect("charge", { amount: 10 });
+        },
+      },
+      effects: {
+        charge: (eff) => {
+          received.push((eff.payload as { amount: number }).amount);
+        },
+      },
+    };
+    const rt = createRuntime(def, impl, {
+      middleware: [
+        (mw, next) => {
+          expect(() => {
+            (mw.effects[0]?.payload as { amount: number }).amount = 9999;
+          }).toThrow(TypeError);
+          next();
+        },
+      ],
+    });
+    rt.send({ type: "PAY" });
+    expect(received).toEqual([10]);
+  });
+
+  it("production-depth snapshots keep nested context unfrozen through middleware", () => {
+    const ctx = { nested: { n: 1 } };
+    const def = defineMachine<typeof ctx, { type: "GO" }, "a" | "b">({
+      id: "prod-depth",
+      initial: "a",
+      context: ctx,
+      states: { a: { on: { GO: "b" } }, b: {} },
+    });
+    const rt = createRuntime(def, {}, { middleware: [logger(() => {})] });
+    rt.send({ type: "GO" });
+    expect(Object.isFrozen(rt.getSnapshot())).toBe(true);
+    expect(Object.isFrozen(ctx.nested)).toBe(process.env.NODE_ENV !== "production");
   });
 });

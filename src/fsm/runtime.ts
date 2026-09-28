@@ -131,7 +131,19 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     changed: boolean,
   ) {
     if (!middlewareChain) return;
-    middlewareChain(deepFreeze({ prev, next: snapshot, event, effects, changed }), () => {});
+    // prev/next are already frozen to the NODE_ENV depth (STABILITY.md), so
+    // only event and effects are deep-frozen here; deep-freezing the snapshots
+    // would freeze caller-owned nested context in production.
+    middlewareChain(
+      Object.freeze({
+        prev,
+        next: snapshot,
+        event: deepFreeze(event),
+        effects: deepFreeze(effects),
+        changed,
+      }),
+      () => {},
+    );
   }
 
   function dispatchEffects(effects: readonly Effect[], context: Ctx, event: Evt): void {
