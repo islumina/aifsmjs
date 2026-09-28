@@ -214,6 +214,31 @@ describe("createScheduler", () => {
     expect(inner).toHaveBeenCalled();
   });
 
+  it("an explicitly-undefined per-call signal does not override the scheduler default (aifsmjs-18)", () => {
+    const ac = new AbortController();
+    const s = createScheduler({ signal: ac.signal });
+    const fn = vi.fn();
+    // biome-ignore lint/suspicious/noExplicitAny: exercising a JS/non-exact-optional caller forwarding `signal: undefined`
+    s.after(100, fn, { signal: undefined } as any);
+    ac.abort();
+    expect(s.size).toBe(0);
+    vi.advanceTimersByTime(100);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("an explicitly-undefined per-call setTimeout does not override the injected default (aifsmjs-18)", () => {
+    const fakeSet = vi.fn((fn: () => void, _ms: number) => {
+      fn();
+      return 0;
+    });
+    const s = createScheduler({ setTimeout: fakeSet });
+    const inner = vi.fn();
+    // biome-ignore lint/suspicious/noExplicitAny: exercising a JS/non-exact-optional caller forwarding `setTimeout: undefined`
+    s.after(0, inner, { setTimeout: undefined } as any);
+    expect(fakeSet).toHaveBeenCalled();
+    expect(inner).toHaveBeenCalled();
+  });
+
   it("createScheduler: abort listener detached via removeEventListener after timer fires (memory-leak regression)", () => {
     // Mirror of the after() regression test: when a signal is supplied to
     // createScheduler().after(), firing the timer must explicitly detach the

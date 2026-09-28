@@ -108,14 +108,26 @@ export function createScheduler(defaults?: AfterOptions): Scheduler {
 
   const sched: Scheduler = {
     after(ms, fn, opts) {
-      const merged: AfterOptions = { ...defaults, ...opts };
+      // Field-by-field merge with `??`: an explicitly-undefined per-call field
+      // (common when forwarding optional options in JS, or in TS without
+      // exactOptionalPropertyTypes) must fall back to the scheduler's default,
+      // not silently win over it the way `{ ...defaults, ...opts }` would.
+      // Built with `exactOptionalPropertyTypes` in mind: an option that ends
+      // up undefined after the merge is left OUT of the object rather than
+      // set to `undefined`, so the AfterOptions type is honoured exactly.
+      const signal = opts?.signal ?? defaults?.signal;
+      const setTimeoutFn = opts?.setTimeout ?? defaults?.setTimeout;
+      const clearTimeoutFn = opts?.clearTimeout ?? defaults?.clearTimeout;
       // Signal handling is lifted to the scheduler layer: we own one abort
       // listener per timer and route it through the scheduler-level cancel so
       // the abort path also removes the handle from `pending`. The inner
       // after() therefore must NOT see the signal — otherwise it would clear
       // its timer on abort without ever touching `pending`, leaking the entry
       // (FSM-R-01, path a).
-      const { signal, ...innerOpts } = merged;
+      const innerOpts: AfterOptions = {
+        ...(setTimeoutFn !== undefined && { setTimeout: setTimeoutFn }),
+        ...(clearTimeoutFn !== undefined && { clearTimeout: clearTimeoutFn }),
+      };
 
       // Path b: scheduling on an already-aborted signal must not grow the Set.
       // after() returns NOOP in that case; tracking it would be a permanent
