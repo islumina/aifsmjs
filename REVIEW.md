@@ -17,7 +17,7 @@ Current review state after the 2026-09-28 ai*js pass.
 | P3 | `after()` ms clamping (aifsmjs-17) | Open | `after()` passes `ms` straight to `setTimeout`; delays above 2^31-1, `Infinity`, or `NaN` are silently clamped to ~1ms by the host, so a long-lived or "never" timer fires immediately. Fix: validate `ms` and chain successive timeouts past the 2^31-1 boundary. Deferred: reworking cancel/abort semantics across a timer chain is a larger change than a P3 patch. |
 | P3 | Async effect rejection with no `'error'` listener is swallowed (aifsmjs-14) | Open | With no `rt.on('error')` registered (or after `dispose()` cleared listeners), a rejecting async effect disappears without trace. Surfacing it as `unhandledRejection` would crash Node >=15 processes by default and changes the STABILITY "fire-and-forget, rejections go to `'error'`" contract, so it needs a decision first (e.g. an opt-in handler or a dev-only warning). |
 | P3 | PBT property runtimes never disposed (aifsmjs-16, partial) | Open | The effect-dispatch half of aifsmjs-16 is fixed (see below); disposing each property's runtime (so its abort signal fires) was left out — adding `try/finally { real.dispose() }` to all three properties pushed `dist/pbt/index.js` over its 8,500 B budget. |
-| — | `dist/pbt/index.js` size budget is nearly full | Note | 8,472 / 8,500 B after this pass. Any further change to the shared `runtime.ts`/`definition.ts`/`snapshot.ts`/`lifecycle.ts` closure will need a compensating trim or a budget review. |
+| — | `dist/pbt/index.js` size budget is nearly full | Note | 8,471 / 8,500 B after this pass. Any further change to the shared `runtime.ts`/`definition.ts`/`snapshot.ts`/`lifecycle.ts` closure will need a compensating trim or a budget review. |
 
 ## Fixed Summary
 

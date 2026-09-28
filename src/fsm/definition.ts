@@ -160,9 +160,9 @@ export function setup<
           ? { readonly context?: Ctx }
           : { readonly context: Ctx }),
     ) => {
-      const cast = (
-        def.context === undefined ? { ...def, context: {} as Ctx } : def
-      ) as unknown as MachineDef<Ctx, Evt, States>;
+      const cast = (def.context === undefined
+        ? { ...def, context: {} as Ctx }
+        : def) as unknown as MachineDef<Ctx, Evt, States>;
       validateDefinition(cast);
       return cast;
     },
