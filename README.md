@@ -49,7 +49,7 @@ Prefer `setup<Ctx, Evt>().defineMachine()` for state inference. Use bare `define
 | --- | --- |
 | `aifsmjs` | `setup`, `defineMachine`, `createRuntime`, `createMachine`, `step`, `assign`, snapshots, runtime/errors/types. |
 | `aifsmjs/guards` | `and`, `or`, `not`, `stateIn`. Guards must be synchronous. |
-| `aifsmjs/effects` | `enqueue.effect()` descriptors and `runEffects()`. |
+| `aifsmjs/effects` | `createEnqueuer()` and `runEffects()`. |
 | `aifsmjs/inspect` | Read-only middleware helpers: `logger`, `persist`, `recorder`. |
 | `aifsmjs/replay` | Pure event-log replay. |
 | `aifsmjs/pbt` | fast-check property helpers. |
