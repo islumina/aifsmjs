@@ -184,9 +184,8 @@ export type Middleware<Ctx, Evt, States extends string> = (
 ) => void;
 
 /**
- * Payload of the `'transition'` runtime event — emitted whenever a transition
- * fired (`changed === true`), including an internal transition whose state
- * `value` did not change (only its `context` did).
+ * Payload of the `'transition'` runtime event — emitted after each `send()` or
+ * `reset()` that actually changed the snapshot value.
  */
 export type RuntimeTransitionEvent<Ctx, Evt, States extends string> = Readonly<{
   prev: Snapshot<Ctx, States>;

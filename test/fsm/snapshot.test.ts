@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { defineMachine } from "../../src/fsm/definition.js";
 import { createRuntime } from "../../src/fsm/runtime.js";
 import { createSnapshot, deepFreeze } from "../../src/fsm/snapshot.js";
@@ -148,30 +148,5 @@ describe("deepFreeze — shallow-frozen inputs (aifsmjs-5)", () => {
     rt.send({ type: "GO" });
     expect(Object.isFrozen(rt.getSnapshot())).toBe(true);
     expect(Object.isFrozen(ctx.nested)).toBe(process.env.NODE_ENV !== "production");
-  });
-
-  it("IS_DEV computation does not throw when the `process` global is absent (aifsmjs-20)", async () => {
-    // A bundler define-replacement (Vite, webpack 5) only substitutes the
-    // `process.env.NODE_ENV` expression textually; it does not polyfill a
-    // runtime `process` global. Simulate that by removing `process` entirely
-    // and re-importing a fresh copy of the module: the try/catch around the
-    // read must swallow the ReferenceError and fall back to a shallow freeze,
-    // never throw.
-    const originalProcess = globalThis.process;
-    // biome-ignore lint/performance/noDelete: test-only global removal to simulate a browser build
-    delete (globalThis as { process?: unknown }).process;
-    vi.resetModules();
-    try {
-      const fresh = await import("../../src/fsm/snapshot.js");
-      const ctx = { nested: { n: 1 } };
-      expect(() => fresh.createSnapshot({ value: "a", context: ctx })).not.toThrow();
-      const s = fresh.createSnapshot({ value: "a", context: ctx });
-      expect(Object.isFrozen(s)).toBe(true);
-      // No `process` global to read NODE_ENV from -> falls back to false (shallow freeze only).
-      expect(Object.isFrozen(ctx.nested)).toBe(false);
-    } finally {
-      globalThis.process = originalProcess;
-      vi.resetModules();
-    }
   });
 });

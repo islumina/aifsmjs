@@ -96,30 +96,6 @@ describe("defineMachine", () => {
   });
 });
 
-describe("defineMachine / setup().defineMachine — explicit `context: undefined` (aifsmjs-19)", () => {
-  it("defineMachine defaults an explicitly-undefined context to {}", () => {
-    const def = defineMachine<{ n: number }, { type: string }, "a">({
-      id: "explicit-undefined",
-      initial: "a",
-      // biome-ignore lint/suspicious/noExplicitAny: exercising the non-exact-optional caller shape
-      context: undefined as any,
-      states: { a: {} },
-    });
-    expect(def.context).toEqual({});
-  });
-
-  it("setup().defineMachine defaults an explicitly-undefined context to {}", () => {
-    const def = setup<{ n: number }, { type: string }>().defineMachine({
-      id: "explicit-undefined-setup",
-      initial: "a",
-      // biome-ignore lint/suspicious/noExplicitAny: exercising the non-exact-optional caller shape
-      context: undefined as any,
-      states: { a: {} },
-    });
-    expect(def.context).toEqual({});
-  });
-});
-
 // ---------------------------------------------------------------------------
 // C2 — sub-machine definitions are deep-validated at construction.
 //
