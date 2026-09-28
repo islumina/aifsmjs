@@ -116,11 +116,9 @@ export function defineMachine<
   Evt extends { type: string } = { type: string },
   States extends string = string,
 >(def: MachineConfig<Ctx, Evt, States>): MachineDef<Ctx, Evt, States> {
-  const normalized = (!("context" in def) ? { ...def, context: {} as Ctx } : def) as MachineDef<
-    Ctx,
-    Evt,
-    States
-  >;
+  const normalized = (
+    def.context === undefined ? { ...def, context: {} as Ctx } : def
+  ) as MachineDef<Ctx, Evt, States>;
   validateDefinition(normalized);
   return normalized;
 }
@@ -162,9 +160,9 @@ export function setup<
           ? { readonly context?: Ctx }
           : { readonly context: Ctx }),
     ) => {
-      const cast = (!("context" in def)
-        ? { ...def, context: {} as Ctx }
-        : def) as unknown as MachineDef<Ctx, Evt, States>;
+      const cast = (
+        def.context === undefined ? { ...def, context: {} as Ctx } : def
+      ) as unknown as MachineDef<Ctx, Evt, States>;
       validateDefinition(cast);
       return cast;
     },
