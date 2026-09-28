@@ -59,10 +59,14 @@ export function snapshotAlwaysFrozen<Ctx, Evt extends { type: string }, States e
 ): void {
   fc.assert(
     fc.property(commandsFromMachine(def, impl, eventArbitraries), (cmds) => {
-      const real = createRuntime(def, impl);
-      const model: FsmModel<Ctx, States> = initialModel(def);
-      fc.modelRun(() => ({ model, real }), cmds);
-      return Object.isFrozen(real.getSnapshot());
+      const real = createRuntime(def, impl, { dispatchEffects: false });
+      try {
+        const model: FsmModel<Ctx, States> = initialModel(def);
+        fc.modelRun(() => ({ model, real }), cmds);
+        return Object.isFrozen(real.getSnapshot());
+      } finally {
+        real.dispose();
+      }
     }),
     buildAssertOpts(opts),
   );
@@ -105,14 +109,18 @@ export function reachableStatesSubsetDeclared<
   const declared = new Set<string>(Object.keys(def.states));
   fc.assert(
     fc.property(commandsFromMachine(def, impl, eventArbitraries), (cmds) => {
-      const real = createRuntime(def, impl);
-      const model: FsmModel<Ctx, States> = initialModel(def);
-      fc.modelRun(() => ({ model, real }), cmds);
-      for (const s of model.reached as Set<string>) {
-        /* v8 ignore next — property failure branch; an unreachable state would indicate a bug. */
-        if (!declared.has(s)) return false;
+      const real = createRuntime(def, impl, { dispatchEffects: false });
+      try {
+        const model: FsmModel<Ctx, States> = initialModel(def);
+        fc.modelRun(() => ({ model, real }), cmds);
+        for (const s of model.reached as Set<string>) {
+          /* v8 ignore next — property failure branch; an unreachable state would indicate a bug. */
+          if (!declared.has(s)) return false;
+        }
+        return declared.has(real.getSnapshot().value);
+      } finally {
+        real.dispose();
       }
-      return declared.has(real.getSnapshot().value);
     }),
     buildAssertOpts(opts),
   );
@@ -133,10 +141,14 @@ export function replayEqualsFold<Ctx, Evt extends { type: string }, States exten
   fc.assert(
     fc.property(fc.array(eventArb, { maxLength: 32 }), (events) => {
       const real = createRuntime(def, impl, { dispatchEffects: false });
-      for (const e of events) real.send(e);
-      const live = real.getSnapshot();
-      const replayed = replay(initialSnapshot(def), events, def, impl).snapshot;
-      return live.value === replayed.value && contextEquals(live.context, replayed.context);
+      try {
+        for (const e of events) real.send(e);
+        const live = real.getSnapshot();
+        const replayed = replay(initialSnapshot(def), events, def, impl).snapshot;
+        return live.value === replayed.value && contextEquals(live.context, replayed.context);
+      } finally {
+        real.dispose();
+      }
     }),
     buildAssertOpts(opts),
   );

@@ -13,7 +13,7 @@ import {
   snapshotAlwaysFrozen,
   unknownEventNoOp,
 } from "../../src/pbt/properties.js";
-import { type Evt, makeImpl, trafficLight } from "../fixtures/traffic-light.js";
+import { type EffectLog, type Evt, makeImpl, trafficLight } from "../fixtures/traffic-light.js";
 
 const eventArbs = {
   NEXT: fc.constant({ type: "NEXT" } as Evt),
@@ -48,6 +48,13 @@ describe("PBT generic properties — traffic-light fixture", () => {
 
   it("assertAll convenience runner", () => {
     assertAll(trafficLight, makeImpl(), eventArbs, { numRuns: 25 });
+  });
+
+  it("snapshotAlwaysFrozen and reachableStatesSubsetDeclared never dispatch effects (aifsmjs-16)", () => {
+    const log: EffectLog = [];
+    snapshotAlwaysFrozen(trafficLight, makeImpl(log), eventArbs, { numRuns: 25 });
+    reachableStatesSubsetDeclared(trafficLight, makeImpl(log), eventArbs, { numRuns: 25 });
+    expect(log).toEqual([]);
   });
 
   it("opts honour seed and verbose flags", () => {
