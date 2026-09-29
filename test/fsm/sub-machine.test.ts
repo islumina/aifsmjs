@@ -301,11 +301,35 @@ describe("Group D — Both-states-have-sub transition", () => {
     expect(oldChild.disposed).toBe(true);
   });
 
-  it("D3: old child is disposed before new child is instantiated (ordering via identity check)", () => {
-    // Use a two-sub parent to verify old child disposed before new child exists
+  it("D3: the new child is constructed while the old child is still live; the old one is disposed before commit (aifsmjs-8)", () => {
+    // 0.6.0 prepare-then-commit order (replaces the 0.5.x "old disposed before
+    // new instantiated" pin): construct the new child, THEN dispose the old.
     const def = makeTwoSubParent();
+    // Observe the new child's construction: createRuntime reads the sub's
+    // `context` while building its initial snapshot. Arm only for the switch.
+    const stateB = def.states.stateB as { sub: MachineDef<unknown, { type: string }, string> };
+    const realChild2 = stateB.sub;
+    const observed: { armed: boolean; sawChild1?: boolean; child1Disposed?: boolean } = {
+      armed: false,
+    };
+    const holder: { rt?: Runtime<{}, { type: "SWITCH" }, "stateA" | "stateB">; c1?: unknown } = {};
+    const probe = Object.create(realChild2, {
+      context: {
+        get() {
+          if (observed.armed && holder.rt) {
+            observed.sawChild1 = holder.rt.subRuntime() === holder.c1;
+            observed.child1Disposed = (holder.c1 as { disposed: boolean }).disposed;
+          }
+          return realChild2.context;
+        },
+      },
+    });
+    // biome-ignore lint/suspicious/noExplicitAny: test patching the sub definition
+    (def.states as any).stateB = { sub: probe };
     const rt = createRuntime(def, {});
+    holder.rt = rt;
     const child1 = rt.subRuntime()!;
+    holder.c1 = child1;
     let wasChild1DisposedAtTransitionTime = false;
     let child2AtTransitionTime: Runtime<unknown, { type: string }, string> | undefined;
 
@@ -315,13 +339,17 @@ describe("Group D — Both-states-have-sub transition", () => {
       child2AtTransitionTime = rt.subRuntime();
     });
 
+    observed.armed = true;
     rt.send({ type: "SWITCH" });
 
-    // child1 was disposed (applySubLifecycle ran before subscribe notified)
+    // During the new child's construction the old child was still current and live.
+    expect(observed.sawChild1).toBe(true);
+    expect(observed.child1Disposed).toBe(false);
+    // By notification time the old child is disposed and the new one is live.
     expect(wasChild1DisposedAtTransitionTime).toBe(true);
-    // child2 exists at subscribe time
     expect(child2AtTransitionTime).toBeDefined();
     expect(child2AtTransitionTime).not.toBe(child1);
+    expect(child2AtTransitionTime!.disposed).toBe(false);
   });
 });
 
@@ -707,6 +735,80 @@ describe("Group I — SubMachineError rollback", () => {
     expect(middlewareCalls).toHaveLength(0);
   });
 
+  it("I5: init failure while leaving a sub state leaves the old child live and returned by subRuntime() (aifsmjs-8)", () => {
+    // loading --RETRY--> loading replaces the child. Break the sub AFTER the
+    // first child exists so the replacement's construction fails.
+    const def = defineMachine<
+      { step: number },
+      { type: "START" } | { type: "RETRY" },
+      "idle" | "loading"
+    >({
+      id: "init-fail-keeps-old",
+      initial: "idle",
+      context: { step: 0 },
+      states: {
+        idle: { on: { START: "loading" } },
+        loading: { sub: childMachine, subImpl: childImpl, on: { RETRY: "loading" } },
+      },
+    });
+    const rt = createRuntime(def, {});
+    rt.send({ type: "START" });
+    const child1 = rt.subRuntime()!;
+    const transitions: string[] = [];
+    rt.on("transition", () => transitions.push("fired"));
+    // biome-ignore lint/suspicious/noExplicitAny: inject a sub whose construction throws
+    (def as any).states.loading.sub = { id: "broken", initial: "x", context: {}, states: null };
+    let thrown: unknown;
+    try {
+      rt.send({ type: "RETRY" });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(SubMachineError);
+    expect((thrown as SubMachineError).phase).toBe("init");
+    expect((thrown as SubMachineError).parentState).toBe("loading");
+    // 0.5.x disposed the old child first and left subRuntime() undefined here.
+    expect(rt.subRuntime()).toBe(child1);
+    expect(child1.disposed).toBe(false);
+    expect(rt.getSnapshot().value).toBe("loading");
+    expect(transitions).toEqual([]);
+  });
+
+  it("I6: dispose failure discards the new child; subRuntime() is undefined until re-entry", () => {
+    const def = defineMachine<
+      { step: number },
+      { type: "START" } | { type: "RETRY" },
+      "idle" | "loading"
+    >({
+      id: "dispose-fail-discards-new",
+      initial: "idle",
+      context: { step: 0 },
+      states: {
+        idle: { on: { START: "loading" } },
+        loading: { sub: childMachine, subImpl: childImpl, on: { RETRY: "loading" } },
+      },
+    });
+    const rt = createRuntime(def, {});
+    rt.send({ type: "START" });
+    const child1 = rt.subRuntime()!;
+    const origDispose = child1.dispose.bind(child1);
+    // biome-ignore lint/suspicious/noExplicitAny: test patching
+    (child1 as any).dispose = () => {
+      origDispose();
+      throw new Error("dispose-boom");
+    };
+    let thrown: unknown;
+    try {
+      rt.send({ type: "RETRY" });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(SubMachineError);
+    expect((thrown as SubMachineError).phase).toBe("dispose");
+    expect(rt.subRuntime()).toBeUndefined();
+    expect(rt.getSnapshot().value).toBe("loading");
+  });
+
   it("I4: child dispose throw during send() transition → SubMachineError(phase: dispose), snapshot rolled back", () => {
     const rt = createRuntime(parentMachine, parentImpl);
     rt.send({ type: "START" });
@@ -729,6 +831,54 @@ describe("Group I — SubMachineError rollback", () => {
     expect((thrown as SubMachineError).phase).toBe("dispose");
     // Snapshot rolled back to prev
     expect(rt.getSnapshot().value).toBe(prevValue);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Group K — re-entrant parent calls during the sub lifecycle (aifsmjs-10)
+// ---------------------------------------------------------------------------
+
+describe("Group K — re-entrant parent calls during the sub lifecycle", () => {
+  it("K1: a child 'dispose' listener's send() to the parent is queued until the transition commits", () => {
+    const rt = createRuntime(parentMachine, parentImpl);
+    rt.send({ type: "START" });
+    const child1 = rt.subRuntime()!;
+    // Mid-FINISH the child is disposed; its listener re-enters the parent.
+    child1.on("dispose", () => {
+      rt.send({ type: "RETRY" });
+    });
+    rt.send({ type: "FINISH" });
+    // 0.5.x ran RETRY against the uncommitted "loading" state and leaked a
+    // live child into "done", a state with no sub.
+    expect(rt.getSnapshot().value).toBe("done");
+    expect(rt.subRuntime()).toBeUndefined();
+    expect(child1.disposed).toBe(true);
+  });
+
+  it("K2: a child 'dispose' listener's reset() on the parent runs after the transition", () => {
+    const rt = createRuntime(parentMachine, parentImpl);
+    rt.send({ type: "START" });
+    const child1 = rt.subRuntime()!;
+    child1.on("dispose", () => {
+      rt.reset();
+    });
+    const seen: string[] = [];
+    rt.subscribe((s) => seen.push(s.value));
+    rt.send({ type: "FINISH" });
+    expect(seen).toEqual(["done", "idle"]);
+    expect(rt.getSnapshot().value).toBe("idle");
+    expect(rt.subRuntime()).toBeUndefined();
+  });
+
+  it("K3: a child 'dispose' listener that disposes the parent mid-swap leaves no live child behind", () => {
+    const rt = createRuntime(parentMachine, parentImpl);
+    rt.send({ type: "START" });
+    const child1 = rt.subRuntime()!;
+    child1.on("dispose", () => rt.dispose());
+    expect(() => rt.send({ type: "RETRY" })).not.toThrow();
+    expect(rt.disposed).toBe(true);
+    // 0.5.x adopted the replacement child into the disposed parent.
+    expect(rt.subRuntime()).toBeUndefined();
   });
 });
 
@@ -772,28 +922,41 @@ describe("Group J — property-based lifecycle invariants", () => {
     return createRuntime(parentMachine, parentImpl);
   }
 
-  it("J1: subRuntime() is defined IFF current state has a sub; the live child is never disposed", () => {
+  it("J1: subRuntime() is defined IFF current state has a sub; the live child is never disposed — also when child 'dispose' listeners re-enter the parent (aifsmjs-10)", () => {
     fc.assert(
-      fc.property(fc.array(cmdArb, { maxLength: 30 }), (cmds) => {
-        const rt = makeParentRuntime();
-        const check = () => {
-          const inSubState = rt.getSnapshot().value === "loading";
-          const child = rt.subRuntime();
-          // P1 — lifecycle binding: child exists exactly when in a sub-bearing state
-          expect(child !== undefined).toBe(inSubState);
-          // P2 — the live child is never observed disposed
-          if (child !== undefined) expect(child.disposed).toBe(false);
-        };
-        check(); // t=0 (initial state "idle" has no sub)
-        for (const cmd of cmds) {
-          drive(rt, cmd);
-          check();
-        }
-        rt.dispose();
-        // After parent dispose the child reference is cleared.
-        expect(rt.subRuntime()).toBeUndefined();
-      }),
-      { numRuns: 50 },
+      fc.property(
+        fc.array(cmdArb, { maxLength: 30 }),
+        fc.option(cmdArb, { nil: undefined }),
+        (cmds, reentry) => {
+          const rt = makeParentRuntime();
+          const wired = new Set<unknown>();
+          const check = () => {
+            const inSubState = rt.getSnapshot().value === "loading";
+            const child = rt.subRuntime();
+            // P1 — lifecycle binding: child exists exactly when in a sub-bearing state
+            expect(child !== undefined).toBe(inSubState);
+            // P2 — the live child is never observed disposed
+            if (child !== undefined) expect(child.disposed).toBe(false);
+            // Every new child re-enters the parent from its 'dispose' listener
+            // (fired mid-transition by the sub lifecycle).
+            if (child !== undefined && reentry !== undefined && !wired.has(child)) {
+              wired.add(child);
+              child.on("dispose", () => {
+                if (!rt.disposed) drive(rt, reentry);
+              });
+            }
+          };
+          check(); // t=0 (initial state "idle" has no sub)
+          for (const cmd of cmds) {
+            drive(rt, cmd);
+            check();
+          }
+          rt.dispose();
+          // After parent dispose the child reference is cleared.
+          expect(rt.subRuntime()).toBeUndefined();
+        },
+      ),
+      { numRuns: 100 },
     );
   });
 

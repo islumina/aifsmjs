@@ -33,13 +33,39 @@ const budgets = {
   // Historical inlined calibration (pre-split): index 4,465 B and pbt 5,228 B
   // measured in v0.3.0. These are this script's own source of truth — they
   // are not mirrored anywhere else (README carries no size-budget bullet).
-  "dist/index.js": 6_500,
+  //
+  // 0.6.0 (maintainer-approved for the 0.6.0 minor, ai*js size-budget rule):
+  // index 6,500 -> 6,700 and pbt 8,500 -> 8,800 B; every other budget is
+  // unchanged (replay was granted 3,500 but still fits 3,300 after the trims).
+  // Bytes consumed by 0.6.0 contracts, all in the shared runtime closure that
+  // index and pbt both carry:
+  //   + run-to-completion FIFO mailbox for nested send()/reset() (aifsmjs-3/10)
+  //   + prepare-then-commit sub-machine child swap (aifsmjs-8)
+  //   + InvalidActionResultError + prototype-preserving mergeContext (aifsmjs-11)
+  //   + initial-state sub-chain cycle walk in validateDefinition (aifsmjs-15)
+  //   + dev-only console.warn for an unobserved async effect rejection (aifsmjs-14)
+  //   + reset() status/context change detection (aifsmjs-7)
+  //   + skip-removed listener fan-out (ai*js re-entrancy rule)
+  //   + InvalidDefinitionError argument validation at the definition/runtime
+  //     boundary (ai*js error rule)
+  //   + pbt only: try/finally dispose() in three properties (aifsmjs-16)
+  //   - findChosenIsExternal second guard pass (aifsmjs-9, via stepWithMeta)
+  //   - dead parent-abort child wiring (wireChildAbort / childAbortCleanup)
+  //   - can() re-implementing step()'s transition pick; duplicate isPlainRecord;
+  //     setup().defineMachine's copy of defineMachine
+  //   - tsup's shared `__export` helper chunk (~210 B on EVERY entry), emitted
+  //     only because aifsmjs/pbt re-exported `properties` as a module namespace
+  // Measured 0.5.9 -> 0.6.0: index 6,359 -> 6,654 / guards 1,375 -> 1,161 /
+  // effects 1,574 -> 1,365 / inspect 552 -> 329 / replay 3,115 -> 3,139 /
+  // pbt 8,471 -> 8,718 / timer 1,071 -> 1,018 B (timer gained after() ms/fn
+  // validation and the 2^31-1 clampDelay, aifsmjs-17).
+  "dist/index.js": 6_700,
   "dist/guards/index.js": 1_500,
   "dist/effects/index.js": 1_700,
   "dist/inspect/index.js": 1_000,
   "dist/replay/index.js": 3_300,
   // pbt pulls createRuntime (and its chunk) transitively.
-  "dist/pbt/index.js": 8_500,
+  "dist/pbt/index.js": 8_800,
   "dist/timer/index.js": 1_200,
 };
 

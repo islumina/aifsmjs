@@ -12,10 +12,24 @@ import type {
   StateDef,
 } from "./types.js";
 
+/**
+ * Thrown for an invalid machine definition and, since 0.6.0, for argument
+ * misuse at the definition/runtime boundary (`defineMachine`,
+ * `setup().defineMachine`, `createMachine`, `createRuntime`, and the
+ * `send` / `reset` / `subscribe` / `on` / `onTransition` runtime methods).
+ * Messages read `aifsmjs: <subject> must be <constraint>`.
+ */
 export class InvalidDefinitionError extends Error {
   constructor(message: string) {
     super(`aifsmjs: ${message}`);
     this.name = "InvalidDefinitionError";
+  }
+}
+
+/** Throw `InvalidDefinitionError("<subject> must be an object")` unless `value` is a non-null object. */
+export function assertObject(value: unknown, subject: string): void {
+  if (value === null || typeof value !== "object") {
+    throw new InvalidDefinitionError(`${subject} must be an object`);
   }
 }
 
@@ -30,10 +44,7 @@ function validateDefinition<Ctx, Evt extends { type: string }, States extends st
   if (!def.id || typeof def.id !== "string") {
     throw new InvalidDefinitionError("definition must have a non-empty string `id`");
   }
-  /* v8 ignore next 3 — additional safety: TS prevents non-object `states`; this guards untyped JS callers. */
-  if (!def.states || typeof def.states !== "object") {
-    throw new InvalidDefinitionError("definition must have a `states` object");
-  }
+  assertObject(def.states, "definition states");
   const stateKeys = Object.keys(def.states) as States[];
   if (stateKeys.length === 0) {
     throw new InvalidDefinitionError("`states` must declare at least one state");
@@ -47,6 +58,7 @@ function validateDefinition<Ctx, Evt extends { type: string }, States extends st
     States,
     (typeof def.states)[States],
   ][]) {
+    assertObject(stateDef, `state "${stateName}"`);
     // §4 sub-shape check + deep recursion (C2). The shallow shape check rejects
     // a malformed sub; recursing validateDefinition into the sub then rejects an
     // unknown transition target or a declared-async guard at construction
@@ -81,6 +93,7 @@ function validateDefinition<Ctx, Evt extends { type: string }, States extends st
     for (const [evtType, entry] of Object.entries(stateDef.on)) {
       const transitions = normalizeTransitions(entry);
       for (const t of transitions) {
+        assertObject(t, `transition ${stateName} -[${evtType}]->`);
         if (t.target !== undefined && !stateKeys.includes(t.target)) {
           throw new InvalidDefinitionError(
             `transition ${stateName} -[${evtType}]-> "${String(t.target)}" targets an unknown state`,
@@ -93,6 +106,22 @@ function validateDefinition<Ctx, Evt extends { type: string }, States extends st
         }
       }
     }
+  }
+  // Initial-state sub chain (C2 cycle guard does not cover it): createRuntime
+  // boots the child of every initial state eagerly, so a chain of initial-state
+  // subs that revisits a definition would recurse until the stack overflows.
+  // Runs once per distinct definition (root + each sub reached above). Subs
+  // reachable only through non-initial states may still be self-referential.
+  const path = new Set<object>();
+  let d = def as MachineDef<unknown, { type: string }, string> | undefined;
+  while (d) {
+    if (path.has(d)) {
+      throw new InvalidDefinitionError(
+        `sub-machine cycle through initial states: "${d.id}" is re-entered via initial-state subs`,
+      );
+    }
+    path.add(d);
+    d = d.states[d.initial]?.sub;
   }
 }
 
@@ -116,6 +145,7 @@ export function defineMachine<
   Evt extends { type: string } = { type: string },
   States extends string = string,
 >(def: MachineConfig<Ctx, Evt, States>): MachineDef<Ctx, Evt, States> {
+  assertObject(def, "definition");
   const normalized = (
     def.context === undefined ? { ...def, context: {} as Ctx } : def
   ) as MachineDef<Ctx, Evt, States>;
@@ -149,24 +179,9 @@ export function setup<
       (Record<string, never> extends Ctx ? { readonly context?: Ctx } : { readonly context: Ctx }),
   ) => MachineDef<Ctx, Evt, States>;
 } {
-  return {
-    defineMachine: <const States extends string>(
-      def: Readonly<{
-        id: string;
-        initial: NoInfer<States>;
-        states: Readonly<{ [K in States]: StateDef<Ctx, Evt, NoInfer<States>> }>;
-      }> &
-        (Record<string, never> extends Ctx
-          ? { readonly context?: Ctx }
-          : { readonly context: Ctx }),
-    ) => {
-      const cast = (def.context === undefined
-        ? { ...def, context: {} as Ctx }
-        : def) as unknown as MachineDef<Ctx, Evt, States>;
-      validateDefinition(cast);
-      return cast;
-    },
-  };
+  // Same normalisation + validation as defineMachine; only the type-level
+  // signature differs (States inferred from `keyof states`).
+  return { defineMachine: defineMachine as never };
 }
 
 /**

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { defineMachine } from "../../src/fsm/definition.js";
+import { InvalidDefinitionError, defineMachine } from "../../src/fsm/definition.js";
 import { RuntimeDisposedError, createRuntime } from "../../src/fsm/runtime.js";
+import type { Implementations, MiddlewareContext } from "../../src/fsm/types.js";
+import { assign } from "../../src/fsm/updater.js";
 import { type EffectLog, makeImpl, trafficLight } from "../fixtures/traffic-light.js";
 
 describe("createRuntime", () => {
@@ -280,10 +282,9 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
 
   it("on('transition') payload is captured pre-reentry (outer.next does not show inner's mutation)", () => {
     // Regression: send() used to use the mutable outer `snapshot` variable for
-    // the transition payload's `next`. If an effect handler synchronously
-    // calls send() again, the inner reassignment of `snapshot` would race
-    // ahead and the outer payload's `next.value` would point at the inner
-    // state instead of the state that paired with the outer event.
+    // the transition payload's `next`. Since 0.6.0 a send() from a listener is
+    // queued (run-to-completion), so the outer payload can no longer be
+    // overtaken; this pins that each payload still references its own outcome.
     const events: string[] = [];
     const runtime = createRuntime(trafficLight, {
       // `?? {}` keeps the property non-undefined under exactOptionalPropertyTypes
@@ -303,19 +304,18 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
       }
     });
     runtime.send({ type: "NEXT" });
-    // Order: outer emits red->green; inside that handler, inner send triggers
-    // green->yellow which emits green->yellow synchronously. Both payloads
-    // must reference their own outcomes, not be reordered or aliased.
+    // Order: outer emits red->green; the inner send queued inside that
+    // handler then runs its own full sequence and emits green->yellow. Both
+    // payloads reference their own outcomes, not reordered or aliased.
     expect(events).toEqual(["red->green", "green->yellow"]);
   });
 
   it("reset() 'transition' payload is captured pre-reentry (FSM-B-01 / FSM-T-03)", () => {
     // Mirror of the send() re-entrancy regression above, but with reset() as
-    // the OUTER call. reset() ran notify() (which fires subscribe listeners)
-    // before reading the live `snapshot` for the emitted 'transition' payload.
-    // A subscriber that re-entrantly send()s advances `snapshot`, so reset's
-    // emitted next pointed at the re-entry's state instead of the reset target
-    // — an event whose prev/next pair never actually happened.
+    // the OUTER call. reset() once ran notify() (which fires subscribe
+    // listeners) before reading the live `snapshot` for the 'transition'
+    // payload, so a subscriber's send() leaked into reset's `next`. The send()
+    // is now queued behind the reset's own notifications (aifsmjs-3).
     const runtime = createRuntime(trafficLight, makeImpl());
     runtime.send({ type: "NEXT" }); // red -> green, so reset() is a real change
 
@@ -333,7 +333,7 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
       // Fires inside reset()'s notify(); re-enter with a send() the first time.
       if (snap.value === "red" && reenterOnce) {
         reenterOnce = false;
-        runtime.send({ type: "NEXT" }); // red -> green, inside reset()'s notify
+        runtime.send({ type: "NEXT" }); // red -> green, queued behind the reset
       }
     });
 
@@ -343,7 +343,7 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
     // The reset genuinely went green -> red; its emitted payload must say so,
     // not "green->green" (aliasing the re-entry's outcome into next).
     expect(resetPayloads).toEqual(["green->red"]);
-    // And the live snapshot reflects the re-entrant send that ran last.
+    // And the live snapshot reflects the queued send that ran last.
     expect(runtime.getSnapshot().value).toBe("green");
   });
 
@@ -516,11 +516,10 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
-  it("emit() snapshots transition listeners before iterating (FAM-S-03)", () => {
-    // Family canonical (aieventjs .slice() before iterate): a listener removed
-    // by another listener DURING dispatch still fires for the current event if
-    // it was registered when the event was emitted. Iterating the live Set
-    // would skip it. Listener A unsubscribes B; B must still fire this round.
+  it("emit() skips a transition listener removed mid-dispatch (ai*js fan-out rule, 0.6.0)", () => {
+    // 0.6.0 contract (replaces the 0.5.x FAM-S-03 pin where B still fired):
+    // the dispatch keeps iterating its pre-taken snapshot but skips an entry
+    // removed meanwhile. Listener A unsubscribes B; B must NOT fire this round.
     const runtime = createRuntime(trafficLight, makeImpl());
     const order: string[] = [];
     runtime.on("transition", () => {
@@ -531,11 +530,44 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
       order.push("B");
     });
     runtime.send({ type: "NEXT" });
-    expect(order).toEqual(["A", "B"]); // B fired despite being removed by A
-    // Next dispatch: B is now gone.
+    expect(order).toEqual(["A"]);
     order.length = 0;
     runtime.send({ type: "NEXT" });
     expect(order).toEqual(["A"]);
+  });
+
+  it("emit() skips listeners removed by a signal abort or dispose() mid-dispatch", () => {
+    const runtime = createRuntime(trafficLight, makeImpl());
+    const ac = new AbortController();
+    const order: string[] = [];
+    runtime.on("transition", () => {
+      order.push("A");
+      ac.abort();
+    });
+    runtime.on("transition", () => order.push("B"), { signal: ac.signal });
+    runtime.on("transition", () => {
+      order.push("C");
+      runtime.dispose();
+    });
+    runtime.on("transition", () => order.push("D"));
+    runtime.send({ type: "NEXT" });
+    expect(order).toEqual(["A", "C"]);
+  });
+
+  it("a once-listener goes inert before its first call: a send() from inside it cannot re-fire it", () => {
+    const runtime = createRuntime(trafficLight, makeImpl());
+    const calls: string[] = [];
+    runtime.on(
+      "transition",
+      (e) => {
+        calls.push(`once:${e.next.value}`);
+        runtime.send({ type: "NEXT" });
+      },
+      { once: true },
+    );
+    runtime.on("transition", (e) => calls.push(e.next.value));
+    runtime.send({ type: "NEXT" });
+    expect(calls).toEqual(["once:green", "green", "yellow"]);
   });
 
   it("emit() snapshot: a listener added during dispatch does not fire this round (FAM-S-03)", () => {
@@ -553,19 +585,25 @@ describe("runtime lifecycle — dispose / reset / signal", () => {
     expect(order).toEqual(["A", "C"]);
   });
 
-  it("subscribe() snapshots listeners before iterating (FAM-S-03)", () => {
-    // Same canonical guarantee for the subscribe() channel (notify()).
+  it("subscribe() skips a listener removed mid-dispatch; one added waits for the next event", () => {
+    // Same 0.6.0 fan-out rule for the subscribe() channel.
     const runtime = createRuntime(trafficLight, makeImpl());
     const order: string[] = [];
     runtime.subscribe(() => {
       order.push("A");
       offB();
+      runtime.subscribe(() => order.push("C"));
     });
     const offB = runtime.subscribe(() => {
       order.push("B");
     });
     runtime.send({ type: "NEXT" });
-    expect(order).toEqual(["A", "B"]); // B still fires for this dispatch
+    expect(order).toEqual(["A"]);
+    order.length = 0;
+    runtime.send({ type: "NEXT" });
+    expect(order[0]).toBe("A");
+    expect(order).toContain("C");
+    expect(order).not.toContain("B");
   });
 
   it("on() after dispose is a no-op", () => {
@@ -756,5 +794,280 @@ describe("runtime events — per-listener isolation (aifsmjs-6)", () => {
     expect(() => runtime.send({ type: "GO" })).toThrow("t-boom");
     expect(calls).toEqual(["first", "second", "third"]);
     expect(runtime.getSnapshot().value).toBe("b");
+  });
+});
+
+describe("reset() change detection includes status and context (aifsmjs-7)", () => {
+  type C = { n: number };
+  type E = { type: "INC" };
+  const machine = defineMachine<C, E, "a" | "b">({
+    id: "reset-ctx",
+    initial: "a",
+    context: { n: 0 },
+    // INC is internal: the value stays "a", only the context changes.
+    states: { a: { on: { INC: { actions: ["inc"] } } }, b: {} },
+  });
+  const impl: Implementations<C, E> = {
+    actions: { inc: assign(({ context }) => ({ n: context.n + 1 })) },
+  };
+
+  it("same value + a different context reference notifies subscribers, middleware and 'transition'", () => {
+    const changedFlags: boolean[] = [];
+    const rt = createRuntime(machine, impl, {
+      middleware: [
+        (mw, next) => {
+          changedFlags.push(mw.changed);
+          next();
+        },
+      ],
+    });
+    rt.send({ type: "INC" });
+    changedFlags.length = 0;
+    const seen: number[] = [];
+    const transitions: number[] = [];
+    rt.subscribe((snap) => seen.push(snap.context.n));
+    rt.on("transition", (e) => transitions.push(e.next.context.n));
+    const after = rt.reset();
+    expect(after.value).toBe("a");
+    expect(after.context).toBe(machine.context);
+    expect(seen).toEqual([0]);
+    expect(transitions).toEqual([0]);
+    expect(changedFlags).toEqual([true]);
+  });
+
+  it("same value + the same context reference stays silent", () => {
+    const changedFlags: boolean[] = [];
+    const rt = createRuntime(machine, impl, {
+      middleware: [
+        (mw, next) => {
+          changedFlags.push(mw.changed);
+          next();
+        },
+      ],
+    });
+    const fn = vi.fn();
+    rt.subscribe(fn);
+    rt.on("transition", fn);
+    rt.reset();
+    expect(fn).not.toHaveBeenCalled();
+    expect(changedFlags).toEqual([false]);
+  });
+});
+
+describe("middleware never freezes the caller's event (aifsmjs-4)", () => {
+  type C = { n: number };
+  type E = { type: "GO"; payload: { items: number[] } };
+  const machine = defineMachine<C, E, "a" | "b">({
+    id: "mw-event",
+    initial: "a",
+    context: { n: 0 },
+    states: { a: { on: { GO: "b" } }, b: {} },
+  });
+
+  it("dev: the event and its nested payload stay mutable; middleware sees the same object", () => {
+    let seen: MiddlewareContext<C, E, "a" | "b">["event"] | undefined;
+    const rt = createRuntime(
+      machine,
+      {},
+      {
+        middleware: [
+          (mw, next) => {
+            seen = mw.event;
+            expect(Object.isFrozen(mw)).toBe(true);
+            next();
+          },
+        ],
+      },
+    );
+    const event: E = { type: "GO", payload: { items: [1] } };
+    rt.send(event);
+    expect(seen).toBe(event);
+    expect(Object.isFrozen(event)).toBe(false);
+    expect(Object.isExtensible(event.payload)).toBe(true);
+    event.payload.items.push(2);
+    expect(event.payload.items).toEqual([1, 2]);
+  });
+
+  it("production: the event is not frozen either", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.resetModules();
+    try {
+      const fresh = await import("../../src/fsm/runtime.js");
+      const rt = fresh.createRuntime(machine, {}, { middleware: [(_mw, next) => next()] });
+      const event: E = { type: "GO", payload: { items: [1] } };
+      rt.send(event);
+      expect(rt.getSnapshot().value).toBe("b");
+      expect(Object.isFrozen(event)).toBe(false);
+      expect(Object.isExtensible(event.payload)).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+});
+
+describe("argument validation at the runtime boundary (InvalidDefinitionError)", () => {
+  const def = trafficLight;
+  // biome-ignore lint/suspicious/noExplicitAny: deliberate misuse from untyped callers
+  const loose = (v: unknown): any => v;
+
+  it("createRuntime rejects a non-object definition, states, implementations or options", () => {
+    expect(() => createRuntime(loose(undefined), {})).toThrow(InvalidDefinitionError);
+    expect(() => createRuntime(loose(undefined), {})).toThrow(
+      /^aifsmjs: definition must be an object$/,
+    );
+    expect(() => createRuntime(loose({ id: "x", initial: "a" }), {})).toThrow(
+      /aifsmjs: definition states must be an object/,
+    );
+    expect(() => createRuntime(def, loose(undefined))).toThrow(
+      /aifsmjs: implementations must be an object/,
+    );
+    expect(() => createRuntime(def, makeImpl(), loose(null))).toThrow(
+      /aifsmjs: options must be an object/,
+    );
+  });
+
+  it("createRuntime rejects a middleware option that is not an array of functions", () => {
+    for (const middleware of [loose({}), loose([5]), loose([() => {}, "x"])]) {
+      expect(() => createRuntime(def, makeImpl(), { middleware })).toThrow(
+        /aifsmjs: options\.middleware must be an array of functions/,
+      );
+    }
+  });
+
+  it("send()/reset() reject an event that is not an object with a string type", () => {
+    const rt = createRuntime(def, makeImpl());
+    const seen = vi.fn();
+    rt.subscribe(seen);
+    for (const bad of [undefined, null, 5, "NEXT", { type: 1 }]) {
+      expect(() => rt.send(loose(bad))).toThrow(InvalidDefinitionError);
+    }
+    expect(() => rt.send(loose(undefined))).toThrow(
+      /aifsmjs: send\(\) event must be an object with a string type/,
+    );
+    expect(() => rt.reset(loose(5))).toThrow(/aifsmjs: reset\(\) event must be an object/);
+    expect(() => rt.reset()).not.toThrow();
+    expect(seen).not.toHaveBeenCalled();
+    expect(rt.getSnapshot().value).toBe("red");
+  });
+
+  it("a nested send() with a bad event throws at the call instead of poisoning the mailbox", () => {
+    const rt = createRuntime(def, makeImpl());
+    let thrown: unknown;
+    rt.subscribe(() => {
+      try {
+        rt.send(loose(null));
+      } catch (err) {
+        thrown = err;
+      }
+    });
+    expect(rt.send({ type: "NEXT" }).value).toBe("green");
+    expect(thrown).toBeInstanceOf(InvalidDefinitionError);
+  });
+
+  it("subscribe()/on()/onTransition() reject a non-function listener and an unknown event type", () => {
+    const rt = createRuntime(def, makeImpl());
+    expect(() => rt.subscribe(loose(5))).toThrow(/aifsmjs: listener must be a function/);
+    expect(() => rt.on("transition", loose(undefined))).toThrow(
+      /aifsmjs: listener must be a function/,
+    );
+    expect(() => rt.onTransition(loose("x"))).toThrow(InvalidDefinitionError);
+    expect(() => rt.on(loose("bogus"), () => {})).toThrow(
+      /aifsmjs: on\(\) type must be "transition", "error" or "dispose"/,
+    );
+    expect(() => rt.on(loose("toString"), () => {})).toThrow(InvalidDefinitionError);
+    // Nothing was registered: a transition still runs cleanly.
+    expect(rt.send({ type: "NEXT" }).value).toBe("green");
+  });
+
+  it("error.name equals the class name", () => {
+    try {
+      createRuntime(def, loose(undefined));
+    } catch (err) {
+      expect((err as Error).name).toBe("InvalidDefinitionError");
+    }
+  });
+});
+
+describe("async effect rejection with no 'error' listener (aifsmjs-14)", () => {
+  type C = { n: number };
+  type E = { type: "GO" };
+  const machine = defineMachine<C, E, "a" | "b">({
+    id: "warn",
+    initial: "a",
+    context: { n: 0 },
+    states: { a: { on: { GO: { target: "b", actions: ["fx"] } } }, b: {} },
+  });
+  const rejecting: Implementations<C, E> = {
+    actions: { fx: ({ enqueue }) => enqueue.effect("boom") },
+    effects: {
+      boom: async () => {
+        throw new Error("async-boom");
+      },
+    },
+  };
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it("dev: warns once via console.warn when no 'error' listener is registered", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const rt = createRuntime(machine, rejecting);
+    rt.send({ type: "GO" });
+    await flush();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/^aifsmjs: unhandled async effect rejection/);
+    expect((warn.mock.calls[0]?.[1] as Error).message).toBe("async-boom");
+  });
+
+  it("no warning once an 'error' listener exists; the listener gets the rejection", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const rt = createRuntime(machine, rejecting);
+    const errors: unknown[] = [];
+    rt.on("error", (e) => errors.push(e.error));
+    rt.send({ type: "GO" });
+    await flush();
+    expect(warn).not.toHaveBeenCalled();
+    expect(errors).toHaveLength(1);
+  });
+
+  it("a rejection after dispose() (listeners cleared) warns and does not throw", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const rt = createRuntime(machine, {
+        actions: { fx: ({ enqueue }) => enqueue.effect("wait") },
+        effects: {
+          wait: (_eff, { signal }) =>
+            new Promise<void>((_resolve, reject) => {
+              signal.addEventListener("abort", () => reject(new Error("aborted")));
+            }),
+        },
+      });
+      rt.on("error", () => {});
+      rt.send({ type: "GO" });
+      expect(() => rt.dispose()).not.toThrow();
+      await flush();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(unhandled).toEqual([]);
+  });
+
+  it("production: the rejection is discarded silently", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.resetModules();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const fresh = await import("../../src/fsm/runtime.js");
+      const rt = fresh.createRuntime(machine, rejecting);
+      rt.send({ type: "GO" });
+      await flush();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 });

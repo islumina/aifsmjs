@@ -15,7 +15,7 @@ The short index lives at `llms.txt` (see https://llmstxt.org/).
 
 Small deterministic FSM library for replayable TypeScript/JavaScript state machines. Definitions are plain data; guards/actions/effects are injected at runtime.
 
-> **Status: 0.5.9 - stable 1.0-track core.** Core FSM, guards, effects, inspect, replay, PBT helpers, scheduler, and sub-machines are live.
+> **Status: 0.6.0 - stable 1.0-track core.** Core FSM, guards, effects, inspect, replay, PBT helpers, scheduler, and sub-machines are live.
 
 ## Install
 
@@ -71,18 +71,25 @@ Prefer `setup<Ctx, Evt>().defineMachine()` for state inference. Use bare `define
 ## Lifecycle Rules
 
 - `step(def, snapshot, event, impl)` is pure and returns `{ snapshot, effects, changed }`.
-- `createRuntime()` owns mutable runtime state, dispatches effects after commit, and emits transition/error/dispose events.
+- `createRuntime()` owns mutable runtime state. Per event it commits, then runs middleware, effects, `subscribe` listeners and `'transition'` listeners, in that order.
+- `send()`/`reset()` are run-to-completion: a call made from middleware, an effect handler or a listener is queued and runs after the current event's notifications, with the same full sequence.
 - Guards and reducers are sync. Thenable guards throw `AsyncGuardError`.
-- Effects are fire-and-forget descriptors. Async rejection is routed to the runtime `"error"` channel.
-- `reset()` rewinds the snapshot and notifies listeners, but does not run entry actions.
+- Effects are fire-and-forget descriptors. Async rejection is routed to the runtime `"error"` channel; with no `"error"` listener it is dropped (with a `console.warn` outside production).
+- `reset()` rewinds to the initial snapshot without running entry actions, and notifies listeners whenever the value, status or context reference changes.
 - `dispose()` is idempotent; post-dispose `send()`/`reset()` throw `RuntimeDisposedError`.
+- Misused arguments to `defineMachine`, `createRuntime` and the runtime methods throw `InvalidDefinitionError`.
 
 ## Sharp Edges
 
-- Middleware and synchronous effect throws happen after snapshot commit. A throw can leave the committed snapshot visible without later notification.
-- Sub-machine replacement can roll back on init failure, but dispose failure has already torn down the old child.
+- Middleware, synchronous effect and subscriber throws happen after snapshot commit. A throw can leave the committed snapshot visible without later notification, and it drops any queued `send()`/`reset()` calls.
+- A nested `send()` returns the snapshot committed at the time of the call, not the outcome of its own event. Read `getSnapshot()` after the outermost call returns, or subscribe.
+- A listener removed while a notification is running (unsubscribe, `once`, `signal`, `dispose()`) is skipped for the rest of that round.
+- Middleware never freezes your event, but it deep-freezes effect descriptors, including any object you passed as a payload.
+- Actions on an object context must return a plain-object patch (or nothing); the merge keeps the context's prototype. Returning `false`, `0` or `""` throws `InvalidActionResultError`. Prefer plain-object contexts.
+- Sub-machine replacement builds the new child first: on init failure the old child stays live; on dispose failure the old child is already torn down and the new one is discarded.
 - `subRuntime()` can return a disposed child handle if external code disposed it; it is recreated only after the parent exits and re-enters the sub state.
 - `setup().defineMachine()` uses `NoInfer` so states infer from `keyof states`; keep regression tests for exact optional property configurations.
+- `after()` throws `RangeError` for `NaN`, `Infinity` or a negative delay, and clamps delays above 2^31-1 ms (about 24.8 days). To mean "never", do not schedule.
 - Do not perform async I/O inside guards or actions. Send events from effects instead.
 
 ## AI Context
@@ -105,8 +112,26 @@ MIT
 
 All notable changes to aifsmjs are summarized here.
 
-## [Unreleased]
+## [0.6.0] - 2026-09-29
 
+### Breaking
+
+- `Runtime.send()` / `Runtime.reset()`: a call made while the runtime is already processing an event (from middleware, an effect handler, a `subscribe` or `'transition'` listener, or a child runtime's listener) is now queued and processed after the current event's last notification (run-to-completion) instead of running inside it, because the README-recommended "send from an effect" pattern delivered notifications in reverse and left subscribers holding a stale snapshot; the nested call returns the snapshot committed at that moment, and an error from a queued event propagates from the outermost call. Migration: read `getSnapshot()` after the outer `send()`/`reset()` returns (or subscribe) instead of using a nested call's return value or reading the snapshot right after it, and catch errors around the outermost call rather than around a nested `send()`.
+- `Runtime.subscribe()` / `Runtime.on()` / `Runtime.onTransition()`: a listener removed while a notification is running (by its unsubscribe function, `once`, its `signal`, or `dispose()`) is now skipped for the rest of that round instead of still receiving the in-flight event, per the ai*js fan-out re-entrancy rule. Migration: if a removed listener must still see the current event, remove it after the call returns (for example `queueMicrotask(off)`), and do not rely on the remaining listeners running after a mid-notification `dispose()`.
+- `mergeContext()` / action results: for an object context (not an array or binary view) a plain-object patch is now merged into a copy that keeps the context's prototype, where a class-instance context used to be replaced by the bare patch and lose its other fields and methods, and a non-nullish primitive result such as `false` or `0` now throws `InvalidActionResultError` from `step()`/`send()` instead of replacing the context. Migration: return a plain-object partial (or `undefined`) from actions on object contexts; to replace the context wholesale, return a new instance or array (non-plain objects still replace it).
+- `Runtime.send()` / `Runtime.reset()` sub-machine lifecycle: when a transition replaces a child, the new child is now constructed before the old child is disposed, so an init failure leaves the old child live and still returned by `subRuntime()` (it used to be disposed first, leaving `undefined`). Migration: code that runs while a new child is being created must not assume the previous sibling child is already disposed, and code that expected `subRuntime()` to be `undefined` after a `SubMachineError` with `phase: "init"` should expect the previous child.
+- `after()` / `createScheduler().after()`: an `ms` that is `NaN`, `±Infinity`, negative or not a number now throws `RangeError`, and a non-function `fn` throws `TypeError`, synchronously and before any timer is set (they used to fire after about 1 ms, or throw later from inside the timer), and a finite delay above 2^31-1 ms is clamped to 2^31-1 instead of firing almost at once. Migration: pass a finite `ms >= 0` and a function; callers using `Infinity` to mean "never" should simply not schedule.
+- `defineMachine()` / `setup().defineMachine()` / `createMachine()` / `createRuntime()` / `Runtime.send()` / `Runtime.reset()` / `Runtime.subscribe()` / `Runtime.on()` / `Runtime.onTransition()`: argument misuse now throws `InvalidDefinitionError` (`aifsmjs: <subject> must be <constraint>`) at the call — a non-object definition, `states`, state or transition entry; a non-object `impl` or options object, or a `middleware` option that is not an array of functions; an event that is not an object with a string `type`; a non-function listener or an unknown `on()` event type — instead of a bare `TypeError` (at the call or at a later `send()`), a listener that threw at every notification, or a silently accepted value. Migration: pass `{}` as `impl` when a machine uses no named implementations, pass object events with a string `type` and function listeners, and catch `InvalidDefinitionError` where you caught `TypeError`.
+
+### Changes
+
+- Added: `InvalidActionResultError` (root export, `name === "InvalidActionResultError"`, with the offending `actionName`) for an action that returns a non-nullish primitive for an object context.
+- Added: `mergeContext(current, patch, actionName?)` takes an optional action name for that error (default `"<inline>"`).
+- Changed: `InvalidDefinitionError` is also the argument-validation error of the definition/runtime boundary; its non-object `states` message now reads `aifsmjs: definition states must be an object`.
+- Changed: an async effect rejection with no `'error'` listener (none registered, or cleared by `dispose()`) is still discarded, but is now reported via `console.warn` when `NODE_ENV !== "production"`; production behaviour is unchanged and it never becomes an unhandled rejection.
+- Changed: `aifsmjs/pbt`'s `properties` is a frozen object carrying the same eight functions instead of a module namespace object, which drops tsup's shared `__export` helper chunk (about 210 B gzip) from every subpath entry.
+- Changed: `step()` returns a shared frozen empty `effects` array when nothing fires.
+- Changed: size budgets in `scripts/check-size.mjs` (maintainer-approved for 0.6.0): `dist/index.js` 6,500 -> 6,700 B and `dist/pbt/index.js` 8,500 -> 8,800 B, other budgets unchanged; measured gzip closures 0.5.9 -> 0.6.0: index 6,359 -> 6,654, guards 1,375 -> 1,161, effects 1,574 -> 1,365, inspect 552 -> 329, replay 3,115 -> 3,139, pbt 8,471 -> 8,718, timer 1,071 -> 1,018 B.
 - Fixed: transition/implementation lookups (`state.on[event.type]`, guard/action/effect refs) now resolve by own key only, so an undeclared event type or ref named after an `Object.prototype` member (`toString`, `constructor`, `__proto__`, ...) is no longer treated as a declared transition.
 - Fixed: `deepFreeze` no longer throws on binary data (`ArrayBuffer` views, e.g. `Uint8Array`) reached through context or event payloads, in dev snapshots or via middleware in production.
 - Fixed: `deepFreeze` recurses through an object that is already shallow-frozen (e.g. an effect descriptor), instead of stopping there — middleware can no longer mutate an effect payload before dispatch, and an already shallow-frozen dev context is still deep-frozen.
@@ -118,7 +143,16 @@ All notable changes to aifsmjs are summarized here.
 - Fixed: the PBT `snapshotAlwaysFrozen` and `reachableStatesSubsetDeclared` properties no longer dispatch real effects while driving generated commands through a runtime.
 - Fixed: `createScheduler().after()` merges `signal`/`setTimeout`/`clearTimeout` field-by-field with `??` instead of an object spread, so an explicitly-undefined per-call option no longer silently overrides the scheduler's default.
 - Fixed: `MachineConfig`, the parameter type of `defineMachine`, is re-exported from the package root.
+- Fixed: `reset()` now notifies subscribers, middleware (`changed: true`) and `'transition'` listeners when the context reference (or status) differs from the initial snapshot; it used to compare the state value alone and stay silent.
+- Fixed: middleware no longer deep-freezes the caller's event object (and its payload graph) in any `NODE_ENV`; `MiddlewareContext.event` is the caller's object, passed unfrozen.
+- Fixed: a parent `send()`/`reset()` issued from a child's `'dispose'` listener during a transition is queued until the transition commits, so a live child can no longer be left in a state that has no `sub`.
+- Fixed: a parent disposed by a child's `'dispose'` listener during a transition no longer adopts the replacement child; the replacement is disposed and `subRuntime()` returns `undefined`.
+- Fixed: `send()` decides whether a same-value transition is external from the guard pass that produced the snapshot, so each guard runs once per event and a non-idempotent guard can no longer desync the sub-machine lifecycle from the committed state.
+- Fixed: `defineMachine()` rejects a sub-machine cycle through initial states with `InvalidDefinitionError` instead of letting `createRuntime()` recurse until the stack overflows; self-references through non-initial states stay legal.
+- Fixed: `snapshotAlwaysFrozen`, `reachableStatesSubsetDeclared` and `replayEqualsFold` dispose the runtime they create for each generated run, so its `AbortSignal` fires and no run leaks a live runtime.
+- Fixed: `package.json` `exports` nests `types` under `import` and `require` (`require.types` points at the `.d.cts` files) for every subpath, so `node16` / `nodenext` CommonJS consumers no longer hit TS1479 / TS1471; `verify-exports` walks nested conditions.
 - Docs: corrected the `aifsmjs/effects` Public Surface row (README/README_ZHTW) to name the real export, `createEnqueuer()`, instead of `enqueue.effect()`.
+- Docs: STABILITY.md's Behavioral Contract states the run-to-completion and fan-out clauses, the reset, merge, argument-validation and timer rules, and the new sub-machine order; README and README_ZHTW Lifecycle Rules and Sharp Edges mirror them, and the `Runtime` / `MiddlewareContext` JSDoc says the same.
 
 ## [0.5.9] - 2026-06-29
 
@@ -155,21 +189,27 @@ All notable changes to aifsmjs are summarized here.
 
 | Surface | Status | Notes |
 | --- | --- | --- |
-| `aifsmjs` root | Stable | Definition/runtime/step/snapshot APIs and core errors. |
+| `aifsmjs` root | Stable | Definition/runtime/step/snapshot APIs and core errors: `InvalidDefinitionError`, `InvalidActionResultError`, `UnknownActionError`, `UnknownGuardError`, `AsyncGuardError`, `RuntimeDisposedError`, `SubMachineError`. |
 | `aifsmjs/guards` | Stable | Sync guard combinators. |
 | `aifsmjs/effects` | Stable | Effect descriptors and dispatcher helper. |
 | `aifsmjs/inspect` | Stable | Read-only middleware helpers. |
 | `aifsmjs/replay` | Stable | Pure log replay. |
 | `aifsmjs/pbt` | Stable | fast-check helpers. |
-| `aifsmjs/timer` | Stable | Timer/scheduler helpers. |
+| `aifsmjs/timer` | Stable | Timer/scheduler helpers. Exports no error class: misuse throws a built-in `RangeError`/`TypeError` whose message starts with `aifsmjs: `. |
 
 ## Behavioral Contract
 
 - Definition data is serializable when using string refs instead of inline functions.
-- `step()` is pure and never dispatches effects.
-- Runtime commit happens before middleware, effect dispatch, and listener notification.
-- Async effects are fire-and-forget; rejections emit runtime `"error"`.
-- `reset()` does not run entry actions.
+- `step()` is pure and never dispatches effects. Each guard on the path to the chosen transition runs at most once per event, and `send()` decides the sub-machine lifecycle from that same guard pass.
+- `send()`/`reset()` are run-to-completion: for one event, commit -> middleware -> effects -> `subscribe` listeners -> `'transition'` listeners all complete before any event sent from inside them is processed; nested `send()`/`reset()` calls are queued FIFO and processed afterwards with the same full sequence; a nested call returns the snapshot committed at the time of the call, not the outcome of its own event — read `getSnapshot()` after the outermost call returns. A listener that sends on every notification of a machine that always transitions keeps the drain running.
+- A throw from any event in that sequence (a `SubMachineError`, an unknown action or guard, an `InvalidActionResultError`, or a synchronous middleware, effect-handler or listener throw) drops the calls still queued and propagates from the outermost `send()`/`reset()`; the snapshot stays at the last successful commit. `dispose()` is never queued: it runs at once, drops queued calls, and the outer call returns the last committed snapshot without throwing (the event in progress finishes with cleared listeners and an aborted signal). Parent and child runtimes queue independently.
+- Listener fan-out (`subscribe`, `on`, `onTransition`) is synchronous over a copy of the listener set taken when the notification starts: a listener added meanwhile first fires on the next event, and one removed meanwhile (its unsubscribe function, `once`, its `signal`, or `dispose()`) is skipped for the rest of that round. A `once` listener is removed before it is called. A throwing `on()` listener does not stop the others; the first error is rethrown once all have run.
+- Middleware receives the caller's event object by reference and never freezes it (treat it as read-only). The middleware context object is frozen, `prev`/`next` are frozen to the depth below, and the effect descriptors are deep-frozen, payloads included.
+- Async effects are fire-and-forget; rejections emit runtime `"error"`. A rejection with no `'error'` listener is discarded in production and reported via `console.warn` when `NODE_ENV !== "production"`; it never becomes an unhandled rejection.
+- `reset()` does not run entry actions and always replaces the current sub-machine child. `reset()` notifies subscribers, middleware (`changed: true`) and `'transition'` listeners whenever the value, status, or context reference differs from the initial snapshot.
+- An action result is merged into an object context (not an array or binary view) by a shallow copy that keeps the context's prototype; only own enumerable string and symbol properties are carried, not `#private` or non-enumerable members, so prefer plain-object contexts. A non-nullish primitive result (`false`, `0`, `""`, ...) for an object context throws `InvalidActionResultError`; any other non-plain-object result (an array, a class instance) replaces the context, as does any result for a primitive or array context.
+- Argument misuse at the definition/runtime boundary (`defineMachine`, `setup().defineMachine`, `createMachine`, `createRuntime`, `send`, `reset`, `subscribe`, `on`, `onTransition`) throws `InvalidDefinitionError` (`aifsmjs: <subject> must be <constraint>`) before anything is created or registered. Pure helpers (`step`, `replay`, `mergeContext`, guard combinators, `runEffects`, inspect middleware, PBT properties) trust their typed arguments.
+- `after()` / `createScheduler().after()`: `ms` must be a finite number >= 0 (`RangeError`) and `fn` a function (`TypeError`), checked before any timer or listener exists; a finite delay above 2^31-1 ms (about 24.8 days) is clamped to 2^31-1 when handed to `setTimeout`.
 - `dispose()` aborts runtime signal, clears listeners, and is idempotent. A throwing `'dispose'` listener is swallowed and never aborts teardown.
 
 ## Replay caveat
@@ -188,8 +228,9 @@ Snapshot freezing is depth-dependent on `NODE_ENV`:
 Sub-machines are stable but sharp:
 
 - Entry lazily creates the child; exit disposes it.
-- Init failure rolls back parent transition.
-- Dispose failure happens after the old child is already torn down and surfaces as `SubMachineError`.
+- Entry constructs the new child before the old child is disposed; init failure leaves the old child live and the parent unchanged; dispose failure surfaces after the old child is torn down and the new child is discarded.
+- A `send()`/`reset()` on the parent from a child's listener during the parent's transition is queued until that transition has committed.
+- Sub definitions may reference themselves or each other only through non-initial states; `defineMachine` rejects a cycle through initial-state subs, which the runtime would otherwise boot without end.
 - External child disposal leaves a stale handle until the parent leaves/re-enters the state.
 
 ## Drafts

@@ -171,9 +171,11 @@ export type MiddlewareContext<Ctx, Evt, States extends string> = Readonly<{
   /**
    * The triggering event. May be the user's `Evt` (from `send()` or an
    * explicit `reset(event)`) or the `ResetEvent` sentinel emitted by a
-   * `reset()` with no event argument.
+   * `reset()` with no event argument. This is the caller's event object,
+   * passed unfrozen; treat it as read-only.
    */
   event: Evt | ResetEvent;
+  /** Deep-frozen effect descriptors (payloads included) about to be dispatched. */
   effects: readonly Effect[];
   changed: boolean;
 }>;
@@ -198,9 +200,11 @@ export type RuntimeTransitionEvent<Ctx, Evt, States extends string> = Readonly<{
 
 /**
  * Payload of the `'error'` runtime event — currently emitted for async effect
- * handler rejections (which would otherwise become unhandled). Synchronous
- * throws from effect handlers and middleware still propagate to the caller of
- * `send()` / `reset()`.
+ * handler rejections (which would otherwise become unhandled). With no
+ * `'error'` listener (none registered, or cleared by `dispose()`) a rejection
+ * is discarded; outside production (`NODE_ENV !== "production"`) it is also
+ * reported via `console.warn`. Synchronous throws from effect handlers and
+ * middleware still propagate to the caller of `send()` / `reset()`.
  */
 export type RuntimeErrorEvent<Evt> = Readonly<{
   error: unknown;
@@ -217,6 +221,24 @@ export interface Runtime<Ctx, Evt extends { type: string }, States extends strin
   getSnapshot(): Snapshot<Ctx, States>;
   /** Alias for `getSnapshot()`. */
   snapshot(): Snapshot<Ctx, States>;
+  /**
+   * Process `event`: `step()` -> sub-machine lifecycle -> commit ->
+   * middleware -> effects -> `subscribe` listeners -> `'transition'`
+   * listeners, then return the committed snapshot.
+   *
+   * Run-to-completion: a `send()`/`reset()` made while this runtime is already
+   * processing an event (from middleware, an effect handler, a listener, or a
+   * child runtime's listener) is queued FIFO and processed after the current
+   * event's last notification, with the same full sequence. Such a nested
+   * call returns the snapshot committed at the time of the call, not the
+   * outcome of its own event — read `getSnapshot()` after the outermost call
+   * returns (or subscribe). A throw from any queued event discards the rest
+   * of the queue and propagates from the outermost call.
+   *
+   * Throws `RuntimeDisposedError` after `dispose()`, and
+   * `InvalidDefinitionError` when `event` is not an object with a string
+   * `type`.
+   */
   send(event: Evt): Snapshot<Ctx, States>;
   /**
    * Predict whether sending `event` would fire a transition. Reuses
@@ -224,11 +246,23 @@ export interface Runtime<Ctx, Evt extends { type: string }, States extends strin
    * are expected to be pure; `can` then matches `send` for the same input.
    */
   can(event: Evt): boolean;
+  /**
+   * Call `listener` with the committed snapshot after every event that fired
+   * a transition (`changed === true`), after middleware and effects and before
+   * `'transition'` listeners. A listener removed during a notification round
+   * is skipped for the rest of it; one added waits for the next event.
+   * Throws `InvalidDefinitionError` if `listener` is not a function. Returns
+   * an unsubscribe function (a no-op after `dispose()`).
+   */
   subscribe(listener: (snap: Snapshot<Ctx, States>) => void): () => void;
   /**
    * EventTarget-like typed listener API. Returns an unsubscribe function.
    * `options.signal` removes the listener when aborted; `options.once`
-   * removes the listener after the first invocation. After `dispose()`,
+   * removes the listener before its first invocation. A listener removed
+   * while an event is being dispatched (by its unsubscribe, `once`, its
+   * signal, or `dispose()`) is skipped for the rest of that dispatch; one
+   * added waits for the next event. Throws `InvalidDefinitionError` for an
+   * unknown event `type` or a non-function `listener`. After `dispose()`,
    * `on()` is a no-op and returns a no-op unsubscribe.
    */
   on<K extends keyof RuntimeEventMap<Ctx, Evt, States>>(
@@ -237,17 +271,25 @@ export interface Runtime<Ctx, Evt extends { type: string }, States extends strin
     options?: { signal?: AbortSignal; once?: boolean },
   ): () => void;
   /**
-   * Re-initialise the runtime to the definition's initial snapshot. Triggers
-   * subscribers but does NOT run entry actions (reset = re-birth, not
-   * "transition into initial"). Throws RuntimeDisposedError if disposed.
-   * If an `event` is supplied, middleware sees it as the trigger; otherwise
-   * a sentinel `{ type: "@@aifsmjs/RESET" }` is synthesised.
+   * Re-initialise the runtime to the definition's initial snapshot. Does NOT
+   * run entry actions (reset = re-birth, not "transition into initial"); the
+   * current sub-machine child is always replaced. Notifies subscribers,
+   * middleware (`changed: true`) and `'transition'` listeners whenever the
+   * value, status, or context reference differs from the initial snapshot.
+   * Throws RuntimeDisposedError if disposed. If an `event` is supplied (an
+   * object with a string `type`, else `InvalidDefinitionError`), middleware
+   * sees it as the trigger; otherwise a sentinel
+   * `{ type: "@@aifsmjs/RESET" }` is synthesised. Run-to-completion like
+   * `send()`: a nested call is queued.
    */
   reset(event?: Evt): Snapshot<Ctx, States>;
   /**
    * Tear down: abort the internal AbortController (effect handlers see signal
    * fire), clear listeners, and mark this runtime as disposed. Subsequent
-   * send()/reset() calls throw RuntimeDisposedError. Idempotent.
+   * send()/reset() calls throw RuntimeDisposedError. Idempotent and never
+   * throws. Never queued: called during a dispatch it runs at once, drops any
+   * queued send()/reset() calls, and the outer call returns the last
+   * committed snapshot.
    */
   dispose(): void;
   /**
@@ -266,10 +308,15 @@ export interface Runtime<Ctx, Evt extends { type: string }, States extends strin
    * Returns the currently active sub-Runtime for the current parent state,
    * or undefined if:
    *   - the current state has no `sub` definition, OR
-   *   - the sub-Runtime failed to initialise (SubMachineError was thrown
-   *     from `send()` / `reset()` / `createRuntime` per the spec contract),
-   *     OR
+   *   - the previous child's `dispose()` threw during a transition
+   *     (SubMachineError phase "dispose"; the parent stays in its state and
+   *     the child is recreated when the state is re-entered), OR
    *   - the parent runtime has been disposed.
+   *
+   * When a transition's new child fails to initialise (SubMachineError phase
+   * "init"), the previous child is left untouched and is still returned. A
+   * child that fails to initialise at `createRuntime` bootstrap makes
+   * `createRuntime` itself throw, so there is no runtime to ask.
    *
    * The returned Runtime is typed at the loosest sub-machine signature.
    * Caller casts to the concrete sub type.

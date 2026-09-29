@@ -23,6 +23,22 @@ export type AfterOptions = Readonly<{
 
 const NOOP: AfterHandle = Object.freeze({ cancel: () => {} });
 
+// Largest delay setTimeout honours (2^31-1 ms, about 24.8 days); hosts treat
+// anything larger as ~1 ms. Every delay handed to setTimeout goes through
+// clampDelay (ai*js timer rule; no timer chaining).
+const MAX_DELAY = 2_147_483_647;
+const clampDelay = (ms: number): number => Math.min(ms, MAX_DELAY);
+
+// Argument validation shared by after() and createScheduler().after(), run
+// before any side effect. aifsmjs/timer exports no error class, so misuse is
+// a prefixed built-in RangeError / TypeError.
+function checkArgs(ms: unknown, fn: unknown): void {
+  if (!Number.isFinite(ms) || (ms as number) < 0) {
+    throw new RangeError("aifsmjs: after() ms must be a finite number >= 0");
+  }
+  if (typeof fn !== "function") throw new TypeError("aifsmjs: after() fn must be a function");
+}
+
 function resolveTimers(opts: AfterOptions | undefined): {
   st: SetTimeoutFn;
   ct: ClearTimeoutFn;
@@ -38,6 +54,12 @@ function resolveTimers(opts: AfterOptions | undefined): {
  * `cancel()` clears the pending timer. Optional `signal` aborts the timer when
  * triggered. Aborting after the callback fires is a no-op.
  *
+ * `ms` must be a finite number >= 0 (`NaN`, `Infinity`, negatives and
+ * non-numbers throw `RangeError`) and `fn` a function (`TypeError`); both are
+ * checked before anything else, including an already-aborted `signal`. A
+ * finite `ms` above 2^31-1 (about 24.8 days) is clamped to 2^31-1 when handed
+ * to `setTimeout`. To mean "never", do not schedule.
+ *
  * The abort listener is registered with `{ once: true }` as a baseline, but
  * `{ once: true }` alone does NOT prevent listener accumulation when the same
  * signal is reused across many timers: it only removes the listener when the
@@ -47,6 +69,7 @@ function resolveTimers(opts: AfterOptions | undefined): {
  * long-lived signal never accumulates dead listeners across timer reuse.
  */
 export function after(ms: number, fn: () => void, opts?: AfterOptions): AfterHandle {
+  checkArgs(ms, fn);
   if (opts?.signal?.aborted) return NOOP;
 
   const { st, ct } = resolveTimers(opts);
@@ -77,7 +100,7 @@ export function after(ms: number, fn: () => void, opts?: AfterOptions): AfterHan
     // will never be invoked and must not accumulate on a reused signal.
     if (opts?.signal) opts.signal.removeEventListener("abort", cancel);
     fn();
-  }, ms);
+  }, clampDelay(ms));
 
   // Attach only if the timer has not already fired synchronously (a custom `st`
   // may fire inline); otherwise the listener would be registered AFTER the fire
@@ -108,6 +131,9 @@ export function createScheduler(defaults?: AfterOptions): Scheduler {
 
   const sched: Scheduler = {
     after(ms, fn, opts) {
+      // Same validation as after(), before the aborted-signal shortcut and
+      // before `pending` is touched.
+      checkArgs(ms, fn);
       // Field-by-field merge with `??`: an explicitly-undefined per-call field
       // (common when forwarding optional options in JS, or in TS without
       // exactOptionalPropertyTypes) must fall back to the scheduler's default,
