@@ -77,8 +77,15 @@ describe("PBT generic properties — traffic-light fixture", () => {
       context: { n: 0 },
       states: { a: { on: { GO: { target: "b", actions: ["missing"] } } }, b: {} },
     });
+    // A single run can draw an empty event array and never reach the throwing
+    // action; 20 runs under a fixed seed make the throw deterministic.
     expect(() =>
-      replayEqualsFold(boom, {}, { GO: fc.constant({ type: "GO" as const }) }, { numRuns: 1 }),
+      replayEqualsFold(
+        boom,
+        {},
+        { GO: fc.constant({ type: "GO" as const }) },
+        { numRuns: 20, seed: 1 },
+      ),
     ).toThrow();
     expect(abort).toHaveBeenCalled();
   });
