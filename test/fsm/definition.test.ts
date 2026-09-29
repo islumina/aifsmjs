@@ -238,11 +238,13 @@ describe("defineMachine — sub-machine deep validation (C2)", () => {
     ).not.toThrow();
   });
 
-  it("cycle guard: a sub that references itself terminates (no stack overflow)", () => {
+  it("cycle guard: a sub that references itself through a NON-initial state terminates and is accepted", () => {
     // Build a self-referential sub: parent.a.sub === the sub, and the sub's
-    // own state also points its `.sub` back at itself. Without a cycle guard,
-    // recursive validation would never terminate. The valid (cyclic but
-    // otherwise correct) definition must construct without throwing or hanging.
+    // non-initial state `y` points its `.sub` back at itself. Without a cycle
+    // guard, recursive validation would never terminate. The cycle is legal:
+    // the child for `y` is only built when `y` is entered, not at boot.
+    // (0.5.x pinned the self-reference on the initial state `x`; that shape is
+    // now rejected — see the aifsmjs-15 tests below.)
     // biome-ignore lint/suspicious/noExplicitAny: self-referential structure for the cycle-guard test
     const selfSub: any = {
       id: "self-sub",
@@ -253,8 +255,8 @@ describe("defineMachine — sub-machine deep validation (C2)", () => {
         y: {},
       },
     };
-    // Close the cycle: the sub's state references the same sub object.
-    selfSub.states.x.sub = selfSub;
+    // Close the cycle: the sub's non-initial state references the same sub.
+    selfSub.states.y.sub = selfSub;
 
     expect(() =>
       defineMachine<{ n: number }, { type: "GO" }, "a" | "b">({
@@ -267,6 +269,108 @@ describe("defineMachine — sub-machine deep validation (C2)", () => {
         },
       }),
     ).not.toThrow();
+  });
+});
+
+describe("defineMachine — sub cycle through initial states (aifsmjs-15)", () => {
+  // biome-ignore lint/suspicious/noExplicitAny: cyclic sub graphs built by hand
+  type Loose = any;
+  const mk = (id: string): Loose => ({
+    id,
+    initial: "s",
+    context: {},
+    states: { s: { on: { GO: "t" } }, t: {} },
+  });
+
+  it("rejects a sub whose initial state re-enters the same sub", () => {
+    const selfSub = mk("self");
+    selfSub.states.s.sub = selfSub;
+    const def: Loose = { id: "root", initial: "a", states: { a: { sub: selfSub } } };
+    expect(() => defineMachine(def)).toThrow(InvalidDefinitionError);
+    expect(() => defineMachine(def)).toThrow(
+      /aifsmjs: sub-machine cycle through initial states: "self" is re-entered via initial-state subs/,
+    );
+  });
+
+  it("rejects A.initial -> sub B, B.initial -> sub A at defineMachine", () => {
+    const a = mk("A");
+    const b = mk("B");
+    a.states.s.sub = b;
+    b.states.s.sub = a;
+    const def: Loose = { id: "root", initial: "r", states: { r: { sub: a } } };
+    expect(() => defineMachine(def)).toThrow(/sub-machine cycle through initial states/);
+  });
+
+  it("rejects a root whose initial state's sub chain leads back to the root", () => {
+    const root = mk("root");
+    const b = mk("B");
+    root.states.s.sub = b;
+    b.states.s.sub = root;
+    expect(() => defineMachine(root)).toThrow(/sub-machine cycle through initial states/);
+  });
+
+  it("createMachine / setup().defineMachine reject it too, instead of overflowing the stack in createRuntime", () => {
+    const a = mk("A");
+    const b = mk("B");
+    a.states.s.sub = b;
+    b.states.s.sub = a;
+    const def: Loose = { id: "root", initial: "r", states: { r: { sub: a } } };
+    expect(() => createMachine(def, {})).toThrow(InvalidDefinitionError);
+    expect(() => setup().defineMachine(def)).toThrow(InvalidDefinitionError);
+  });
+
+  it("accepts a self-sub on a non-initial state and still runs it", () => {
+    const sub = mk("self");
+    sub.states.t.sub = sub;
+    const def = defineMachine<Record<string, never>, { type: "GO" }, "a">({
+      id: "root",
+      initial: "a",
+      states: { a: { sub } },
+    });
+    const rt = createRuntime(def, {});
+    const child = rt.subRuntime()!;
+    child.send({ type: "GO" });
+    expect(child.getSnapshot().value).toBe("t");
+    expect(child.subRuntime()).toBeDefined();
+  });
+});
+
+describe("defineMachine — argument shape (InvalidDefinitionError, not TypeError)", () => {
+  // biome-ignore lint/suspicious/noExplicitAny: deliberate misuse from untyped callers
+  const loose = (v: unknown): any => v;
+
+  it("rejects a missing or non-object definition", () => {
+    for (const bad of [undefined, null, 5, "m"]) {
+      expect(() => defineMachine(loose(bad))).toThrow(InvalidDefinitionError);
+      expect(() => setup().defineMachine(loose(bad))).toThrow(
+        /^aifsmjs: definition must be an object$/,
+      );
+    }
+    expect(() => createMachine(loose(undefined), {})).toThrow(InvalidDefinitionError);
+  });
+
+  it("rejects non-object states", () => {
+    expect(() => defineMachine(loose({ id: "m", initial: "a", states: 5 }))).toThrow(
+      /aifsmjs: definition states must be an object/,
+    );
+  });
+
+  it("rejects a state that is not an object", () => {
+    expect(() => defineMachine(loose({ id: "m", initial: "a", states: { a: null } }))).toThrow(
+      /aifsmjs: state "a" must be an object/,
+    );
+    expect(() => defineMachine(loose({ id: "m", initial: "a", states: { a: {}, b: 5 } }))).toThrow(
+      /aifsmjs: state "b" must be an object/,
+    );
+  });
+
+  it("rejects a transition that is neither a state name nor an object", () => {
+    expect(() =>
+      defineMachine(loose({ id: "m", initial: "a", states: { a: { on: { GO: null } } } })),
+    ).toThrow(/aifsmjs: transition a -\[GO\]-> must be an object/);
+    expect(() =>
+      defineMachine(loose({ id: "m", initial: "a", states: { a: { on: { GO: [5] } } } })),
+    ).toThrow(InvalidDefinitionError);
   });
 });
 

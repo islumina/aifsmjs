@@ -35,39 +35,74 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./guards": {
-      "types": "./dist/guards/index.d.ts",
-      "import": "./dist/guards/index.js",
-      "require": "./dist/guards/index.cjs"
+      "import": {
+        "types": "./dist/guards/index.d.ts",
+        "default": "./dist/guards/index.js"
+      },
+      "require": {
+        "types": "./dist/guards/index.d.cts",
+        "default": "./dist/guards/index.cjs"
+      }
     },
     "./effects": {
-      "types": "./dist/effects/index.d.ts",
-      "import": "./dist/effects/index.js",
-      "require": "./dist/effects/index.cjs"
+      "import": {
+        "types": "./dist/effects/index.d.ts",
+        "default": "./dist/effects/index.js"
+      },
+      "require": {
+        "types": "./dist/effects/index.d.cts",
+        "default": "./dist/effects/index.cjs"
+      }
     },
     "./inspect": {
-      "types": "./dist/inspect/index.d.ts",
-      "import": "./dist/inspect/index.js",
-      "require": "./dist/inspect/index.cjs"
+      "import": {
+        "types": "./dist/inspect/index.d.ts",
+        "default": "./dist/inspect/index.js"
+      },
+      "require": {
+        "types": "./dist/inspect/index.d.cts",
+        "default": "./dist/inspect/index.cjs"
+      }
     },
     "./replay": {
-      "types": "./dist/replay/index.d.ts",
-      "import": "./dist/replay/index.js",
-      "require": "./dist/replay/index.cjs"
+      "import": {
+        "types": "./dist/replay/index.d.ts",
+        "default": "./dist/replay/index.js"
+      },
+      "require": {
+        "types": "./dist/replay/index.d.cts",
+        "default": "./dist/replay/index.cjs"
+      }
     },
     "./pbt": {
-      "types": "./dist/pbt/index.d.ts",
-      "import": "./dist/pbt/index.js",
-      "require": "./dist/pbt/index.cjs"
+      "import": {
+        "types": "./dist/pbt/index.d.ts",
+        "default": "./dist/pbt/index.js"
+      },
+      "require": {
+        "types": "./dist/pbt/index.d.cts",
+        "default": "./dist/pbt/index.cjs"
+      }
     },
     "./timer": {
-      "types": "./dist/timer/index.d.ts",
-      "import": "./dist/timer/index.js",
-      "require": "./dist/timer/index.cjs"
+      "import": {
+        "types": "./dist/timer/index.d.ts",
+        "default": "./dist/timer/index.js"
+      },
+      "require": {
+        "types": "./dist/timer/index.d.cts",
+        "default": "./dist/timer/index.cjs"
+      }
     }
   },
   "files": [

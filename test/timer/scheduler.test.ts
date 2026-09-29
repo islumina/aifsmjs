@@ -366,3 +366,80 @@ describe("createScheduler", () => {
     });
   });
 });
+
+describe("after() / createScheduler().after() argument rules (aifsmjs-17)", () => {
+  const MAX = 2_147_483_647;
+
+  it("rejects NaN, ±Infinity, negatives and non-numbers with RangeError before any timer", () => {
+    const st = vi.fn(() => 0);
+    const opts = { setTimeout: st, clearTimeout: () => {} };
+    for (const ms of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      -1,
+      // biome-ignore lint/suspicious/noExplicitAny: deliberate misuse from untyped callers
+      "5" as any,
+    ]) {
+      expect(() => after(ms, () => {}, opts)).toThrow(RangeError);
+    }
+    expect(() => after(-1, () => {}, opts)).toThrow(
+      /^aifsmjs: after\(\) ms must be a finite number >= 0$/,
+    );
+    expect(st).not.toHaveBeenCalled();
+  });
+
+  it("validates before the already-aborted-signal shortcut", () => {
+    const ac = new AbortController();
+    ac.abort();
+    expect(() => after(Number.NaN, () => {}, { signal: ac.signal })).toThrow(RangeError);
+  });
+
+  it("rejects a non-function callback with a prefixed TypeError", () => {
+    const st = vi.fn(() => 0);
+    // biome-ignore lint/suspicious/noExplicitAny: deliberate misuse from untyped callers
+    expect(() => after(10, undefined as any, { setTimeout: st, clearTimeout: () => {} })).toThrow(
+      /^aifsmjs: after\(\) fn must be a function$/,
+    );
+    expect(st).not.toHaveBeenCalled();
+  });
+
+  it("clamps a finite delay above 2^31-1 to 2^31-1 when handing it to setTimeout", () => {
+    const st = vi.fn((_fn: () => void, _ms: number) => 0);
+    after(2 ** 31, () => {}, { setTimeout: st, clearTimeout: () => {} });
+    after(Number.MAX_SAFE_INTEGER, () => {}, { setTimeout: st, clearTimeout: () => {} });
+    after(MAX, () => {}, { setTimeout: st, clearTimeout: () => {} });
+    after(0, () => {}, { setTimeout: st, clearTimeout: () => {} });
+    expect(st.mock.calls.map((c) => c[1])).toEqual([MAX, MAX, MAX, 0]);
+  });
+
+  it("a clamped timer does not fire early", () => {
+    vi.useFakeTimers();
+    try {
+      const fn = vi.fn();
+      after(2 ** 31, fn);
+      vi.advanceTimersByTime(1000);
+      expect(fn).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(MAX);
+      expect(fn).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("createScheduler().after inherits the rules; a rejected call leaves size at 0", () => {
+    const st = vi.fn((_fn: () => void, _ms: number) => 0);
+    const s = createScheduler({ setTimeout: st, clearTimeout: () => {} });
+    expect(() => s.after(Number.POSITIVE_INFINITY, () => {})).toThrow(RangeError);
+    // biome-ignore lint/suspicious/noExplicitAny: deliberate misuse from untyped callers
+    expect(() => s.after(5, null as any)).toThrow(TypeError);
+    const ac = new AbortController();
+    ac.abort();
+    expect(() => s.after(Number.NaN, () => {}, { signal: ac.signal })).toThrow(RangeError);
+    expect(s.size).toBe(0);
+    expect(st).not.toHaveBeenCalled();
+    s.after(2 ** 31, () => {});
+    expect(st.mock.calls[0]?.[1]).toBe(MAX);
+    expect(s.size).toBe(1);
+  });
+});

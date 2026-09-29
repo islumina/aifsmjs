@@ -1,5 +1,5 @@
 import * as fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { defineMachine } from "../../src/fsm/definition.js";
 import type { Implementations } from "../../src/fsm/types.js";
 import { assign } from "../../src/fsm/updater.js";
@@ -55,6 +55,32 @@ describe("PBT generic properties — traffic-light fixture", () => {
     snapshotAlwaysFrozen(trafficLight, makeImpl(log), eventArbs, { numRuns: 25 });
     reachableStatesSubsetDeclared(trafficLight, makeImpl(log), eventArbs, { numRuns: 25 });
     expect(log).toEqual([]);
+  });
+
+  it("snapshotAlwaysFrozen / reachableStatesSubsetDeclared / replayEqualsFold dispose each run's runtime (aifsmjs-16)", () => {
+    // Effects are not dispatched in these properties, so observe the runtime's
+    // own AbortController: dispose() aborts it exactly once per generated run.
+    const abort = vi.spyOn(AbortController.prototype, "abort");
+    snapshotAlwaysFrozen(trafficLight, makeImpl(), eventArbs, { numRuns: 7 });
+    expect(abort).toHaveBeenCalledTimes(7);
+    reachableStatesSubsetDeclared(trafficLight, makeImpl(), eventArbs, { numRuns: 5 });
+    expect(abort).toHaveBeenCalledTimes(12);
+    replayEqualsFold(trafficLight, makeImpl(), eventArbs, { numRuns: 4 });
+    expect(abort).toHaveBeenCalledTimes(16);
+  });
+
+  it("a run's runtime is disposed even when the property throws", () => {
+    const abort = vi.spyOn(AbortController.prototype, "abort");
+    const boom = defineMachine<{ n: number }, { type: "GO" }, "a" | "b">({
+      id: "pbt-throw",
+      initial: "a",
+      context: { n: 0 },
+      states: { a: { on: { GO: { target: "b", actions: ["missing"] } } }, b: {} },
+    });
+    expect(() =>
+      replayEqualsFold(boom, {}, { GO: fc.constant({ type: "GO" as const }) }, { numRuns: 1 }),
+    ).toThrow();
+    expect(abort).toHaveBeenCalled();
   });
 
   it("opts honour seed and verbose flags", () => {

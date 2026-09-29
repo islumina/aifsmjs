@@ -53,11 +53,10 @@ describe("recorder", () => {
 });
 
 // ---------------------------------------------------------------------------
-// FSM-T-02 — characterise (NOT fix) the documented-open middleware edges:
-// silent next() skip and re-entrant send() recorder ordering. These pin the
-// current behaviour so the STABILITY/middleware docs (FSM-B-04) describe what
-// actually happens; a future change here is a deliberate behaviour change that
-// must update these assertions.
+// FSM-T-02 — characterise the middleware edges: silent next() skip, and
+// re-entrant send() recorder ordering (fixed in 0.6.0 by the run-to-completion
+// mailbox, aifsmjs-3). A future change here is a deliberate behaviour change
+// that must update these assertions.
 // ---------------------------------------------------------------------------
 
 describe("middleware contract edges — characterisation (FSM-T-02 / FSM-B-04)", () => {
@@ -87,7 +86,7 @@ describe("middleware contract edges — characterisation (FSM-T-02 / FSM-B-04)",
     expect(runtime.getSnapshot().value).toBe("green");
   });
 
-  it("re-entrant send() from middleware records [inner, outer] for an application order of [outer, inner]", () => {
+  it("re-entrant send() from middleware is queued, so the recorder lists application order [outer, inner]", () => {
     const sink: RecordedEntry<Ctx, Evt, States>[] = [];
     let reentered = false;
     // Holder lets the middleware closure reach the runtime (assigned just
@@ -98,9 +97,8 @@ describe("middleware contract edges — characterisation (FSM-T-02 / FSM-B-04)",
       middleware: [
         (mw, next) => {
           // On the outer red->green event, re-entrantly send before delegating
-          // to the rest of the chain (recorder). The inner event runs its FULL
-          // pipeline — including the recorder push — before this outer frame
-          // reaches the recorder.
+          // to the rest of the chain (recorder). Since 0.6.0 the inner event
+          // is queued and runs its full pipeline only after the outer one.
           if (mw.event.type === "NEXT" && mw.prev.value === "red" && !reentered) {
             reentered = true;
             holder.rt?.send({ type: "NEXT" }); // green -> yellow (inner)
@@ -114,14 +112,13 @@ describe("middleware contract edges — characterisation (FSM-T-02 / FSM-B-04)",
 
     runtime.send({ type: "NEXT" }); // outer: red -> green
 
-    // Application order was outer (red->green) THEN inner (green->yellow), but
-    // recorder's sink — documented as feeding replay() — lists the inner first
-    // because it pushes after next() and the inner pipeline completed first.
-    // Replaying this log would diverge from the real application order.
+    // 0.5.x recorded [inner, outer] (the inner pipeline completed first), so
+    // a replay() of the log diverged from the real application order.
     expect(sink.map((e) => `${e.prev.value}->${e.next.value}`)).toEqual([
-      "green->yellow",
       "red->green",
+      "green->yellow",
     ]);
+    expect(runtime.getSnapshot().value).toBe("yellow");
   });
 });
 

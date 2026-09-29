@@ -1,8 +1,7 @@
-import { initialSnapshot } from "./definition.js";
-import { evalGuard, isThenable, ownValue } from "./evaluator.js";
-import { step } from "./lifecycle.js";
-import { normalizeTransitions } from "./resolver.js";
-import { deepFreeze } from "./snapshot.js";
+import { InvalidDefinitionError, assertObject, initialSnapshot } from "./definition.js";
+import { isThenable, ownValue } from "./evaluator.js";
+import { chooseTransition, stepWithMeta } from "./lifecycle.js";
+import { IS_DEV, deepFreeze } from "./snapshot.js";
 import {
   type Effect,
   type Implementations,
@@ -27,11 +26,15 @@ export class RuntimeDisposedError extends Error {
 /**
  * Thrown by `send()` / `reset()` when a sub-machine init or dispose throws.
  *
- * Invariants:
- * - `phase: "init"` — child constructor threw. Parent snapshot was rolled
- *   back to `prev`; no middleware ran; no `'transition'` emitted; no effects.
- * - `phase: "dispose"` — previous child's `dispose()` threw during transition.
- *   Parent snapshot was rolled back to `prev`; child reference is cleared.
+ * Prepare-then-commit: the new child is constructed before the previous one
+ * is disposed. Invariants:
+ * - `phase: "init"` — the new child's constructor threw. The parent snapshot
+ *   is not committed and the previous child (if any) is untouched: still live
+ *   and still returned by `subRuntime()`. No middleware ran, no `'transition'`
+ *   was emitted, no effects were dispatched.
+ * - `phase: "dispose"` — the previous child's `dispose()` threw. The new
+ *   child (if any) was discarded, the parent snapshot is not committed, and
+ *   `subRuntime()` returns `undefined` until the sub state is re-entered.
  * - Never thrown from `runtime.dispose()` cascade (never-throws contract).
  *
  * @since 0.3.0
@@ -71,29 +74,59 @@ function composeMiddleware<Ctx, Evt, States extends string>(
   };
 }
 
+type Queued<Evt> = { kind: "send"; event: Evt } | { kind: "reset"; event?: Evt | undefined };
+
+function assertListener(listener: unknown): void {
+  if (typeof listener !== "function") {
+    throw new InvalidDefinitionError("listener must be a function");
+  }
+}
+
 /**
  * Build a thin stateful runtime around a machine. `send()` calls `step()`,
- * runs the read-only middleware pipeline, dispatches effects, and notifies
- * subscribers. The runtime owns an `AbortController`; `dispose()` aborts it
- * and clears all state.
+ * commits, runs the read-only middleware pipeline, dispatches effects, and
+ * notifies subscribers then `'transition'` listeners. `send()`/`reset()` are
+ * run-to-completion: a call made while the runtime is already dispatching
+ * (from middleware, an effect handler, a listener, or a child runtime) is
+ * queued FIFO and processed after the current event's last notification.
+ * The runtime owns an `AbortController`; `dispose()` aborts it and clears all
+ * state.
+ *
+ * Arguments are validated before anything is created: a non-object `def`,
+ * `def.states`, `impl` or `opts`, or a `middleware` option that is not an
+ * array of functions, throws `InvalidDefinitionError`. The rest of `def` is
+ * trusted (build it with `defineMachine` / `setup().defineMachine`).
  */
 export function createRuntime<Ctx, Evt extends { type: string }, States extends string>(
   def: MachineDef<Ctx, Evt, States>,
   impl: Implementations<Ctx, Evt>,
   opts: RuntimeOptions<Ctx, Evt, States> = {},
 ): Runtime<Ctx, Evt, States> {
+  assertObject(def, "definition");
+  assertObject(def.states, "definition states");
+  assertObject(impl, "implementations");
+  assertObject(opts, "options");
+  const middleware = opts.middleware;
+  if (
+    middleware !== undefined &&
+    !(Array.isArray(middleware) && middleware.every((fn) => typeof fn === "function"))
+  ) {
+    throw new InvalidDefinitionError("options.middleware must be an array of functions");
+  }
   let snapshot: Snapshot<Ctx, States> = initialSnapshot(def);
   const listeners = new Set<(snap: Snapshot<Ctx, States>) => void>();
   const middlewareChain =
-    opts.middleware && opts.middleware.length > 0 ? composeMiddleware(opts.middleware) : undefined;
+    middleware && middleware.length > 0 ? composeMiddleware(middleware) : undefined;
   const shouldDispatch = opts.dispatchEffects !== false;
   const controller = new AbortController();
   let disposed = false;
-  // §3.1 sub-machine state. childRuntime is the live child; childAbortCleanup
-  // detaches the parent-abort listener attached by wireChildAbort. Both are
-  // cleared together whenever the child is replaced or disposed (P1-3 fix).
+  // Run-to-completion (ai*js state-owning dispatcher rule): while one event is
+  // being processed, nested send()/reset() calls land in this FIFO mailbox.
+  let dispatching = false;
+  const mailbox: Queued<Evt>[] = [];
+  // §3.1 The live child of the current state's `sub`, if any. Replaced only by
+  // swapChild(); cleared by dispose().
   let childRuntime: Runtime<unknown, { type: string }, string> | undefined;
-  let childAbortCleanup: (() => void) | undefined;
 
   type EventListeners = {
     [K in keyof RuntimeEventMap<Ctx, Evt, States>]: Set<
@@ -111,16 +144,17 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     type: K,
     payload: RuntimeEventMap<Ctx, Evt, States>[K],
   ): void {
-    // Snapshot-before-iterate (family canonical, aieventjs .slice()): a
-    // listener that subscribes/unsubscribes another during dispatch must not
-    // mutate the set being walked. One array alloc per emit, matching the
-    // family's accepted cost (FAM-S-03).
-    // Per-listener isolation: a throwing listener must not skip the ones after
-    // it (a 'dispose' cleanup hook would leak). The first error is rethrown
-    // once every listener has run, so it still surfaces to the caller.
+    // Snapshot-before-iterate (ai*js fan-out rule): a listener added during
+    // dispatch first fires on the next event, and one removed meanwhile
+    // (unsubscribe, `once`, signal abort, dispose) is skipped for the rest of
+    // this dispatch. Per-listener isolation: a throwing listener must not skip
+    // the ones after it (a 'dispose' cleanup hook would leak). The first error
+    // is rethrown once every listener has run, so it still surfaces.
+    const set = eventListeners[type];
     let failed = false;
     let firstError: unknown;
-    for (const fn of Array.from(eventListeners[type])) {
+    for (const fn of Array.from(set)) {
+      if (!set.has(fn)) continue;
       try {
         fn(payload);
       } catch (err) {
@@ -131,34 +165,6 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
       }
     }
     if (failed) throw firstError;
-  }
-
-  function notify(committed?: Snapshot<Ctx, States>) {
-    const captured = committed ?? snapshot;
-    // Snapshot-before-iterate, as above (FAM-S-03).
-    for (const l of Array.from(listeners)) l(captured);
-  }
-
-  function runMiddleware(
-    prev: Snapshot<Ctx, States>,
-    event: Evt | ResetEvent,
-    effects: readonly Effect[],
-    changed: boolean,
-  ) {
-    if (!middlewareChain) return;
-    // prev/next are already frozen to the NODE_ENV depth (STABILITY.md), so
-    // only event and effects are deep-frozen here; deep-freezing the snapshots
-    // would freeze caller-owned nested context in production.
-    middlewareChain(
-      Object.freeze({
-        prev,
-        next: snapshot,
-        event: deepFreeze(event),
-        effects: deepFreeze(effects),
-        changed,
-      }),
-      () => {},
-    );
   }
 
   function dispatchEffects(effects: readonly Effect[], context: Ctx, event: Evt): void {
@@ -172,189 +178,139 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
       // the 'error' channel; Promise.resolve() normalises them (FSM-B-03).
       if (isThenable(r)) {
         Promise.resolve(r).catch((err: unknown) => {
-          emit("error", { error: err, event });
+          // Never re-thrown: an unhandledRejection would crash Node >= 15 and
+          // break fire-and-forget. With no 'error' listener (none registered,
+          // or cleared by dispose()) it is discarded, with a dev-only warning.
+          if (eventListeners.error.size > 0) emit("error", { error: err, event });
+          else if (IS_DEV) {
+            console.warn(
+              'aifsmjs: unhandled async effect rejection; register runtime.on("error", ...)',
+              err,
+            );
+          }
         });
       }
     }
   }
 
-  // §3.1 Attach one-shot abort listener: parent dispose → child.dispose().
-  // Returns a cleanup fn that detaches the listener; caller stores it in
-  // `childAbortCleanup` and invokes when the child is replaced/disposed
-  // (P1-3 fix: prevent stale listeners accumulating on the parent signal).
-  function wireChildAbort(child: Runtime<unknown, { type: string }, string>): () => void {
-    /* v8 ignore next 7 — parent may already be aborted in edge cases; dispose still runs */
-    if (controller.signal.aborted) {
+  // §3.1 Prepare-then-commit child swap for a move from `prevValue` into
+  // `nextValue` (transitions, reset() and bootstrap). Throws SubMachineError;
+  // the caller must NOT commit the parent snapshot on throw.
+  //   1. Construct the new child first: an init failure leaves the old child
+  //      live and untouched.
+  //   2. Dispose the old child: a failure discards the new child.
+  //   3. Adopt the new child — or discard it when a listener run by step 2
+  //      disposed this runtime meanwhile.
+  function swapChild(prevValue: States, nextValue: States): void {
+    const stateDef = def.states[nextValue];
+    let next: Runtime<unknown, { type: string }, string> | undefined;
+    if (stateDef?.sub) {
       try {
-        child.dispose();
-      } catch {
-        /* swallow */
-      }
-      return () => {};
-    }
-    /* v8 ignore next 7 — defensive: dispose() pre-cleans this listener and
-       disposes the child manually before calling controller.abort(), so
-       onAbort fires only if external code aborts the controller bypassing
-       dispose(). Internal-only controller has no such external path today. */
-    const onAbort = () => {
-      try {
-        child.dispose();
-      } catch {
-        /* swallow */
-      }
-    };
-    controller.signal.addEventListener("abort", onAbort, { once: true });
-    return () => controller.signal.removeEventListener("abort", onAbort);
-  }
-
-  // §3.1 Instantiate the child for `stateValue` (which must have a `sub`) and
-  // wire its parent-abort listener, committing both to childRuntime /
-  // childAbortCleanup. Throws SubMachineError(phase: "init") on failure; the
-  // caller must NOT commit the parent snapshot on throw. Single source of the
-  // init+wire sequence shared by applySubLifecycle, reset(), and bootstrap
-  // (FSM-C-01) — keeps the most failure-sensitive path in one place.
-  function initChildFor(stateValue: States): void {
-    const stateDef = def.states[stateValue];
-    const sub = stateDef?.sub;
-    /* v8 ignore next 2 — callers only invoke this after checking stateDef.sub
-       is defined; the guard documents that precondition and is never taken. */
-    if (sub === undefined) return;
-    let newChild: Runtime<unknown, { type: string }, string>;
-    try {
-      newChild = createRuntime(sub, stateDef.subImpl ?? {});
-    } catch (cause) {
-      throw new SubMachineError(stateValue as string, "init", cause);
-    }
-    childRuntime = newChild;
-    childAbortCleanup = wireChildAbort(newChild);
-  }
-
-  // §3.3 Re-resolve guards to find the chosen transition and determine
-  // whether it is external (has a `target`). Replaces the v0.3.0 dev
-  // hasSelfTargetMarker heuristic that over-reported when an event had both
-  // internal (no-target) and self-target (target === value) candidates
-  // (P1-2 fix). Cost: one extra guard evaluation pass per same-value event.
-  function findChosenIsExternal(value: States, event: Evt, context: Ctx): boolean {
-    const state = def.states[value];
-    if (!state?.on) return false;
-    const list = normalizeTransitions(ownValue(state.on, event.type));
-    if (list.length === 0) return false;
-    for (const t of list) {
-      if (!t.guard || evalGuard(t.guard, context, event, impl, value)) {
-        return t.target !== undefined;
-      }
-    }
-    /* v8 ignore next — defensive: caller only invokes when step() returned
-       changed=true, which guarantees a matching guard exists in the same
-       candidate list. The for-loop above always returns before this line. */
-    return false;
-  }
-
-  // §3.1 Dispose old child and/or init new child. Throws SubMachineError on failure.
-  // Caller must NOT commit snapshot on throw.
-  function applySubLifecycle(prevValue: States, nextValue: States): void {
-    const prevStateDef = def.states[prevValue];
-    const nextStateDef = def.states[nextValue];
-    if (prevStateDef?.sub !== undefined && childRuntime !== undefined) {
-      const child = childRuntime;
-      childRuntime = undefined;
-      childAbortCleanup?.();
-      childAbortCleanup = undefined;
-      try {
-        child.dispose();
+        next = createRuntime(stateDef.sub, stateDef.subImpl ?? {});
       } catch (cause) {
-        throw new SubMachineError(prevValue as string, "dispose", cause);
+        throw new SubMachineError(nextValue, "init", cause);
       }
     }
-    if (nextStateDef?.sub !== undefined) {
-      initChildFor(nextValue);
-    }
-  }
-
-  function send(event: Evt): Snapshot<Ctx, States> {
-    if (disposed) throw new RuntimeDisposedError();
-    const prev = snapshot;
-    const result = step(def, prev, event, impl);
-    const isExternal =
-      result.changed &&
-      (prev.value !== result.snapshot.value ||
-        findChosenIsExternal(prev.value, event, prev.context));
-    // Sub lifecycle BEFORE snapshot commit (§3.4); throws SubMachineError on failure → no commit
-    if (result.changed && isExternal) applySubLifecycle(prev.value, result.snapshot.value);
-    snapshot = result.snapshot;
-    const committed = result.snapshot;
-    runMiddleware(prev, event, result.effects, result.changed);
-    if (shouldDispatch) dispatchEffects(result.effects, committed.context, event);
-    if (result.changed) {
-      notify(committed);
-      emit("transition", {
-        prev,
-        next: committed,
-        event,
-        effects: result.effects,
-        changed: true,
-      } as RuntimeTransitionEvent<Ctx, Evt, States>);
-    }
-    return snapshot;
-  }
-
-  function reset(event?: Evt): Snapshot<Ctx, States> {
-    if (disposed) throw new RuntimeDisposedError();
-    const prev = snapshot;
-    const nextSnap = initialSnapshot(def);
-    const changed = prev.value !== nextSnap.value;
-    // Dispose current child (§3.5)
-    if (childRuntime) {
-      const child = childRuntime;
+    const old = childRuntime;
+    if (old) {
       childRuntime = undefined;
-      childAbortCleanup?.();
-      childAbortCleanup = undefined;
       try {
-        child.dispose();
+        old.dispose();
       } catch (cause) {
-        throw new SubMachineError(prev.value as string, "dispose", cause);
+        next?.dispose(); // a freshly built runtime's dispose() never throws
+        throw new SubMachineError(prevValue, "dispose", cause);
       }
     }
-    // Init child for new initial state if it has sub (§3.5)
-    const initStateDef = def.states[nextSnap.value];
-    if (initStateDef?.sub) {
-      initChildFor(nextSnap.value);
-    }
-    snapshot = nextSnap;
-    // Capture the committed snapshot before notify()/emit so a subscriber that
-    // re-entrantly send()s (which advances the mutable `snapshot`) cannot
-    // corrupt this reset's payload — mirrors send()'s 0.2.0 fix (FSM-B-01).
-    const committed = nextSnap;
-    const triggerEvent: Evt | ResetEvent = event ?? RESET_EVENT;
-    runMiddleware(prev, triggerEvent, [], changed);
+    if (disposed) next?.dispose();
+    else childRuntime = next;
+  }
+
+  // Commit, then middleware -> effects -> subscribers -> 'transition'.
+  function commit(
+    prev: Snapshot<Ctx, States>,
+    next: Snapshot<Ctx, States>,
+    event: Evt | ResetEvent,
+    effects: readonly Effect[],
+    changed: boolean,
+  ): void {
+    snapshot = next;
+    // Middleware gets the caller's event by reference, never frozen (the
+    // caller owns it). The wrapper is frozen, prev/next are already frozen to
+    // the NODE_ENV depth (STABILITY.md), and effects are deep-frozen so no
+    // middleware can alter a payload before dispatch.
+    middlewareChain?.(
+      Object.freeze({ prev, next, event, effects: deepFreeze(effects), changed }),
+      () => {},
+    );
+    // reset() commits no effects, so its sentinel event never reaches a handler.
+    if (shouldDispatch) dispatchEffects(effects, next.context, event as Evt);
     if (changed) {
-      notify(committed);
+      // Same snapshot-before-iterate / skip-removed rule as emit().
+      for (const l of Array.from(listeners)) if (listeners.has(l)) l(next);
       emit("transition", {
         prev,
-        next: committed,
-        event: triggerEvent,
-        effects: [],
+        next,
+        event,
+        effects,
         changed: true,
       } as RuntimeTransitionEvent<Ctx, Evt, States>);
     }
-    // Return the live snapshot (consistent with send()): under a re-entrant
-    // send() from a subscriber, this reflects the latest committed state. Only
-    // the emitted payload above is pinned to this reset's own outcome.
-    return snapshot;
   }
 
-  function can(event: Evt): boolean {
-    if (disposed || snapshot.status === "final") return false;
-    const state = def.states[snapshot.value];
-    /* v8 ignore next — defensive: snapshot.value always corresponds to a declared state. */
-    if (!state) return false;
-    const list = normalizeTransitions(ownValue(state.on, event.type));
-    if (list.length === 0) return false;
-    for (const t of list) {
-      if (!t.guard) return true;
-      if (evalGuard(t.guard, snapshot.context, event, impl, snapshot.value)) return true;
+  function processSend(event: Evt): void {
+    const prev = snapshot;
+    const { result, external } = stepWithMeta(def, prev, event, impl);
+    // Sub lifecycle BEFORE snapshot commit (§3.4), decided from the same guard
+    // pass as the snapshot; throws SubMachineError on failure → no commit.
+    if (result.changed && (prev.value !== result.snapshot.value || external)) {
+      swapChild(prev.value, result.snapshot.value);
     }
-    return false;
+    commit(prev, result.snapshot, event, result.effects, result.changed);
+  }
+
+  function processReset(event: Evt | undefined): void {
+    const prev = snapshot;
+    const next = initialSnapshot(def);
+    // reset() is re-birth: the current child is always replaced (§3.5).
+    swapChild(prev.value, next.value);
+    commit(
+      prev,
+      next,
+      event ?? RESET_EVENT,
+      [],
+      prev.value !== next.value || prev.status !== next.status || prev.context !== next.context,
+    );
+  }
+
+  function run(entry: Queued<Evt>): Snapshot<Ctx, States> {
+    if (disposed) throw new RuntimeDisposedError();
+    if (
+      (entry.kind === "send" || entry.event !== undefined) &&
+      typeof entry.event?.type !== "string"
+    ) {
+      throw new InvalidDefinitionError(
+        `${entry.kind}() event must be an object with a string type`,
+      );
+    }
+    if (dispatching) {
+      // Nested call: queue it and hand back what is committed right now.
+      mailbox.push(entry);
+      return snapshot;
+    }
+    dispatching = true;
+    try {
+      // dispose() empties the mailbox, so the drain stops there too.
+      for (let m: Queued<Evt> | undefined = entry; m && !disposed; m = mailbox.shift()) {
+        if (m.kind === "send") processSend(m.event);
+        else processReset(m.event);
+      }
+    } finally {
+      // A throw discards whatever is still queued; the error propagates from
+      // this (outermost) call and the snapshot stays at the last commit.
+      dispatching = false;
+      mailbox.length = 0;
+    }
+    return snapshot;
   }
 
   function on<K extends keyof RuntimeEventMap<Ctx, Evt, States>>(
@@ -362,6 +318,10 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     listener: (payload: RuntimeEventMap<Ctx, Evt, States>[K]) => void,
     options?: { signal?: AbortSignal; once?: boolean },
   ): () => void {
+    if (!Object.hasOwn(eventListeners, type)) {
+      throw new InvalidDefinitionError('on() type must be "transition", "error" or "dispose"');
+    }
+    assertListener(listener);
     if (disposed || options?.signal?.aborted) return () => {};
     const target = eventListeners[type];
     let detachAbort: (() => void) | undefined;
@@ -378,6 +338,7 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     };
     let wrapped: (payload: RuntimeEventMap<Ctx, Evt, States>[K]) => void = listener;
     if (options?.once) {
+      // Inert before its first call: removed first, then invoked.
       wrapped = (payload) => {
         cleanup();
         listener(payload);
@@ -397,26 +358,24 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
   function dispose(): void {
     if (disposed) return;
     disposed = true;
+    // Never queued: runs at once, even mid-dispatch, and drops queued events.
+    mailbox.length = 0;
     // Cascade child dispose; swallow exceptions (dispose contract) (§3.6)
-    if (childRuntime) {
-      childAbortCleanup?.();
-      childAbortCleanup = undefined;
-      try {
-        childRuntime.dispose();
-      } catch {
-        /* swallow */
-      }
-      childRuntime = undefined;
+    const child = childRuntime;
+    childRuntime = undefined;
+    try {
+      child?.dispose();
+    } catch {
+      /* swallow */
     }
     controller.abort();
     listeners.clear();
-    // §3.6 dispose() is contractually never-throws + idempotent (README:65,
-    // STABILITY.md:22). emit('dispose') runs user listeners; a throwing one
+    // §3.6 dispose() is contractually never-throws + idempotent (README,
+    // STABILITY.md). emit('dispose') runs user listeners; a throwing one
     // must neither escape dispose() nor abort the remaining teardown (which
     // would leak external-signal abort listeners, since a second dispose()
     // short-circuits on `if (disposed) return`). The try/finally guarantees
-    // the listener-set clear + externalAbortCleanups loop ALWAYS run, mirroring
-    // the defensiveness of the child-dispose cascade above.
+    // the listener-set clear + externalAbortCleanups loop ALWAYS run.
     try {
       emit("dispose", undefined as RuntimeEventMap<Ctx, Evt, States>["dispose"]);
     } catch {
@@ -431,9 +390,10 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
   const runtime: Runtime<Ctx, Evt, States> = {
     getSnapshot: () => snapshot,
     snapshot: () => snapshot,
-    send,
-    can,
-    reset,
+    send: (event) => run({ kind: "send", event }),
+    // Same candidate resolution as step(), without running any action.
+    can: (event) => !disposed && chooseTransition(def, snapshot, event, impl) !== undefined,
+    reset: (event) => run({ kind: "reset", event }),
     dispose,
     on,
     get disposed() {
@@ -443,6 +403,7 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
       return controller.signal;
     },
     subscribe(listener) {
+      assertListener(listener);
       if (disposed) return () => {};
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -451,12 +412,9 @@ export function createRuntime<Ctx, Evt extends { type: string }, States extends 
     onTransition: (handler, options) => on("transition", handler, options),
   };
 
-  // §2 Bootstrap: if initial state has sub, instantiate child BEFORE returning.
-  // Failure throws SubMachineError(initialState, "init", cause).
-  const bootStateDef = def.states[snapshot.value];
-  if (bootStateDef?.sub) {
-    initChildFor(snapshot.value);
-  }
+  // §2 Bootstrap: if the initial state has a sub, instantiate the child BEFORE
+  // returning. Failure throws SubMachineError(initialState, "init", cause).
+  swapChild(snapshot.value, snapshot.value);
 
   return runtime;
 }

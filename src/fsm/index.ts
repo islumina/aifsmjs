@@ -35,7 +35,7 @@ export {
   InvalidDefinitionError,
   setup,
 } from "./definition.js";
-export { step, UnknownActionError } from "./lifecycle.js";
+export { InvalidActionResultError, step, UnknownActionError } from "./lifecycle.js";
 export { createRuntime, RuntimeDisposedError, SubMachineError } from "./runtime.js";
 export { assign, mergeContext } from "./updater.js";
 export {
