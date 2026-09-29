@@ -35,7 +35,7 @@ const budgets = {
   // are not mirrored anywhere else (README carries no size-budget bullet).
   //
   // 0.6.0 (maintainer-approved for the 0.6.0 minor, ai*js size-budget rule):
-  // index 6,500 -> 7,000 and pbt 8,500 -> 9,000 B; every other budget is
+  // index 6,500 -> 6,700 and pbt 8,500 -> 8,800 B; every other budget is
   // unchanged (replay was granted 3,500 but still fits 3,300 after the trims).
   // Bytes consumed by 0.6.0 contracts, all in the shared runtime closure that
   // index and pbt both carry:
@@ -59,13 +59,13 @@ const budgets = {
   // effects 1,574 -> 1,365 / inspect 552 -> 329 / replay 3,115 -> 3,139 /
   // pbt 8,471 -> 8,718 / timer 1,071 -> 1,018 B (timer gained after() ms/fn
   // validation and the 2^31-1 clampDelay, aifsmjs-17).
-  "dist/index.js": 7_000,
+  "dist/index.js": 6_700,
   "dist/guards/index.js": 1_500,
   "dist/effects/index.js": 1_700,
   "dist/inspect/index.js": 1_000,
   "dist/replay/index.js": 3_300,
   // pbt pulls createRuntime (and its chunk) transitively.
-  "dist/pbt/index.js": 9_000,
+  "dist/pbt/index.js": 8_800,
   "dist/timer/index.js": 1_200,
 };
 

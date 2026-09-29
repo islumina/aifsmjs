@@ -10,7 +10,7 @@ Current review state after the 2026-09-29 ai*js 0.6.0 pass.
 | P3 | Argument validation outside the definition/runtime boundary | Deferred | `step`, `replay`, `evalGuard`, `mergeContext`, the guard combinators, `runEffects`, the inspect middleware factories, the PBT properties and the shape of `on()`'s `signal` option trust their typed arguments, so misuse there can still surface as a bare `TypeError`. Deferred: an error class in the guards/inspect/replay closures and checks on the hot `step()` path cost bytes and time for callers that already pass typed values; STABILITY.md documents the boundary. |
 | — | Post-commit synchronous throws | Documented | A middleware, synchronous effect-handler or subscriber throw happens after commit: the snapshot stays committed, later notifications for that event are skipped and queued `send()`/`reset()` calls are dropped (README Sharp Edges, STABILITY.md). An opt-in safer mode is not planned for 0.6.x. |
 | — | Effect payloads are deep-frozen when middleware is configured | Documented | Kept from aifsmjs-5 so middleware cannot alter a payload before dispatch; an object passed as an effect payload is frozen with it (README Sharp Edges). The caller's event is never frozen. |
-| — | Size headroom | Note | 6,654 / 7,000 B (`dist/index.js`) and 8,718 / 9,000 B (`dist/pbt/index.js`) after this pass; budgets were raised for 0.6.0 with an itemised comment in `scripts/check-size.mjs`. |
+| — | Size headroom | Note | 6,654 / 6,700 B (`dist/index.js`) and 8,718 / 8,800 B (`dist/pbt/index.js`) after this pass; budgets were raised for 0.6.0 with an itemised comment in `scripts/check-size.mjs`. |
 
 ## Fixed Summary
 
