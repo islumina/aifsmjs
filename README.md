@@ -2,7 +2,7 @@
 
 Small deterministic FSM library for replayable TypeScript/JavaScript state machines. Definitions are plain data; guards/actions/effects are injected at runtime.
 
-> **Status: 0.5.9 - stable 1.0-track core.** Core FSM, guards, effects, inspect, replay, PBT helpers, scheduler, and sub-machines are live.
+> **Status: 0.6.0 - stable 1.0-track core.** Core FSM, guards, effects, inspect, replay, PBT helpers, scheduler, and sub-machines are live.
 
 ## Install
 
@@ -58,18 +58,25 @@ Prefer `setup<Ctx, Evt>().defineMachine()` for state inference. Use bare `define
 ## Lifecycle Rules
 
 - `step(def, snapshot, event, impl)` is pure and returns `{ snapshot, effects, changed }`.
-- `createRuntime()` owns mutable runtime state, dispatches effects after commit, and emits transition/error/dispose events.
+- `createRuntime()` owns mutable runtime state. Per event it commits, then runs middleware, effects, `subscribe` listeners and `'transition'` listeners, in that order.
+- `send()`/`reset()` are run-to-completion: a call made from middleware, an effect handler or a listener is queued and runs after the current event's notifications, with the same full sequence.
 - Guards and reducers are sync. Thenable guards throw `AsyncGuardError`.
-- Effects are fire-and-forget descriptors. Async rejection is routed to the runtime `"error"` channel.
-- `reset()` rewinds the snapshot and notifies listeners, but does not run entry actions.
+- Effects are fire-and-forget descriptors. Async rejection is routed to the runtime `"error"` channel; with no `"error"` listener it is dropped (with a `console.warn` outside production).
+- `reset()` rewinds to the initial snapshot without running entry actions, and notifies listeners whenever the value, status or context reference changes.
 - `dispose()` is idempotent; post-dispose `send()`/`reset()` throw `RuntimeDisposedError`.
+- Misused arguments to `defineMachine`, `createRuntime` and the runtime methods throw `InvalidDefinitionError`.
 
 ## Sharp Edges
 
-- Middleware and synchronous effect throws happen after snapshot commit. A throw can leave the committed snapshot visible without later notification.
-- Sub-machine replacement can roll back on init failure, but dispose failure has already torn down the old child.
+- Middleware, synchronous effect and subscriber throws happen after snapshot commit. A throw can leave the committed snapshot visible without later notification, and it drops any queued `send()`/`reset()` calls.
+- A nested `send()` returns the snapshot committed at the time of the call, not the outcome of its own event. Read `getSnapshot()` after the outermost call returns, or subscribe.
+- A listener removed while a notification is running (unsubscribe, `once`, `signal`, `dispose()`) is skipped for the rest of that round.
+- Middleware never freezes your event, but it deep-freezes effect descriptors, including any object you passed as a payload.
+- Actions on an object context must return a plain-object patch (or nothing); the merge keeps the context's prototype. Returning `false`, `0` or `""` throws `InvalidActionResultError`. Prefer plain-object contexts.
+- Sub-machine replacement builds the new child first: on init failure the old child stays live; on dispose failure the old child is already torn down and the new one is discarded.
 - `subRuntime()` can return a disposed child handle if external code disposed it; it is recreated only after the parent exits and re-enters the sub state.
 - `setup().defineMachine()` uses `NoInfer` so states infer from `keyof states`; keep regression tests for exact optional property configurations.
+- `after()` throws `RangeError` for `NaN`, `Infinity` or a negative delay, and clamps delays above 2^31-1 ms (about 24.8 days). To mean "never", do not schedule.
 - Do not perform async I/O inside guards or actions. Send events from effects instead.
 
 ## AI Context
