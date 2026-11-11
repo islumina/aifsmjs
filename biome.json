@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.6/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "ignore": ["dist", "coverage", "node_modules"]
+    "includes": ["**", "!**/dist", "!**/coverage", "!**/node_modules"]
   },
   "formatter": {
     "enabled": true,
@@ -18,7 +18,7 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "style": {
         "useImportType": "error",
         "useExportType": "error",
@@ -47,7 +47,7 @@
   },
   "overrides": [
     {
-      "include": ["test/timer/**"],
+      "includes": ["**/test/timer/**"],
       "linter": {
         "rules": {
           "suspicious": {

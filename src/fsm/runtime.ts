@@ -1,7 +1,7 @@
-import { InvalidDefinitionError, assertObject, initialSnapshot } from "./definition.js";
+import { assertObject, InvalidDefinitionError, initialSnapshot } from "./definition.js";
 import { isThenable, ownValue } from "./evaluator.js";
 import { chooseTransition, stepWithMeta } from "./lifecycle.js";
-import { IS_DEV, deepFreeze } from "./snapshot.js";
+import { deepFreeze, IS_DEV } from "./snapshot.js";
 import {
   type Effect,
   type Implementations,

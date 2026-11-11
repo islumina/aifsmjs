@@ -1,12 +1,13 @@
 export {
   commandsFromMachine,
-  initialModel,
   type EventArbitraries,
   type FsmCommand,
   type FsmModel,
+  initialModel,
 } from "./commands.js";
 
 export {
+  type AssertOpts,
   assertAll,
   assignDoesNotMutate,
   guardsFalseNoTransition,
@@ -14,7 +15,6 @@ export {
   replayEqualsFold,
   snapshotAlwaysFrozen,
   unknownEventNoOp,
-  type AssertOpts,
 } from "./properties.js";
 
 // Convenience namespace mirroring the README:

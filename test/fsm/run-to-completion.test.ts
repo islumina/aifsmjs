@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { defineMachine } from "../../src/fsm/definition.js";
 import { UnknownActionError } from "../../src/fsm/lifecycle.js";
-import { RuntimeDisposedError, createRuntime } from "../../src/fsm/runtime.js";
+import { createRuntime, RuntimeDisposedError } from "../../src/fsm/runtime.js";
 import type { Implementations, Runtime, Snapshot } from "../../src/fsm/types.js";
 import { childImpl, childMachine } from "../fixtures/sub-machine.js";
 import {
   type Ctx,
   type Evt,
-  type States,
   makeImpl,
+  type States,
   trafficLight,
 } from "../fixtures/traffic-light.js";
 
@@ -215,7 +215,7 @@ describe("run-to-completion mailbox (aifsmjs-3)", () => {
     let armed = true;
     const rt = createRuntime(trafficLight, makeImpl(), {
       middleware: [
-        (mw, next) => {
+        (_mw, next) => {
           if (armed) {
             armed = false;
             const r = holder.rt?.send({ type: "NEXT" });

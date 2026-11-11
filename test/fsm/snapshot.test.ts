@@ -158,7 +158,6 @@ describe("deepFreeze — shallow-frozen inputs (aifsmjs-5)", () => {
     // read must swallow the ReferenceError and fall back to a shallow freeze,
     // never throw.
     const originalProcess = globalThis.process;
-    // biome-ignore lint/performance/noDelete: test-only global removal to simulate a browser build
     delete (globalThis as { process?: unknown }).process;
     vi.resetModules();
     try {

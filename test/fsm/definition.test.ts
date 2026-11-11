@@ -1,8 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
-  InvalidDefinitionError,
   createMachine,
   defineMachine,
+  InvalidDefinitionError,
   initialSnapshot,
   setup,
 } from "../../src/fsm/definition.js";

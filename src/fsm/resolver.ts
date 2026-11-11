@@ -52,6 +52,6 @@ export function resolveTransitions<Ctx, Evt extends { type: string }, States ext
   eventType: string,
 ): readonly TransitionDef<Ctx, Evt, States>[] {
   const state = def.states[stateValue];
-  if (!state || !state.on) return [];
+  if (!state?.on) return [];
   return normalizeTransitions(ownValue(state.on, eventType));
 }

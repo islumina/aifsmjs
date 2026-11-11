@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createEnqueuer, runEffects } from "../../src/effects/index.js";
 import type { Effect, EffectHandler } from "../../src/effects/index.js";
+import { createEnqueuer, runEffects } from "../../src/effects/index.js";
 
 describe("createEnqueuer", () => {
   it("collects effects in order with payloads", () => {

@@ -1,0 +1,5 @@
+# pnpm blocks dependency lifecycle scripts unless listed here, and a blocked
+# script fails the install. esbuild's postinstall only validates its platform
+# binary. Add an entry only after reading the script it runs.
+allowBuilds:
+  esbuild: true

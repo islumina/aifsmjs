@@ -6,8 +6,8 @@ import { commandsFromMachine, initialModel } from "../../src/pbt/commands.js";
 import {
   type Ctx,
   type Evt,
-  type States,
   makeImpl,
+  type States,
   trafficLight,
 } from "../fixtures/traffic-light.js";
 

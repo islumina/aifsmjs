@@ -1,3 +1,21 @@
+export {
+  createMachine,
+  defineMachine,
+  InvalidDefinitionError,
+  initialSnapshot,
+  setup,
+} from "./definition.js";
+export {
+  AsyncGuardError,
+  evalGuard,
+  isAsyncGuardFn,
+  resolveGuard,
+  UnknownGuardError,
+} from "./evaluator.js";
+export { InvalidActionResultError, step, UnknownActionError } from "./lifecycle.js";
+export { normalizeTransition, normalizeTransitions, resolveTransitions } from "./resolver.js";
+export { createRuntime, RuntimeDisposedError, SubMachineError } from "./runtime.js";
+export { createSnapshot, deepFreeze, freezeSnapshot } from "./snapshot.js";
 export type {
   Action,
   ActionRef,
@@ -25,25 +43,5 @@ export type {
   TransitionConfig,
   TransitionDef,
 } from "./types.js";
-
 export { RESET_EVENT_TYPE } from "./types.js";
-
-export {
-  createMachine,
-  defineMachine,
-  initialSnapshot,
-  InvalidDefinitionError,
-  setup,
-} from "./definition.js";
-export { InvalidActionResultError, step, UnknownActionError } from "./lifecycle.js";
-export { createRuntime, RuntimeDisposedError, SubMachineError } from "./runtime.js";
 export { assign, mergeContext } from "./updater.js";
-export {
-  AsyncGuardError,
-  evalGuard,
-  isAsyncGuardFn,
-  resolveGuard,
-  UnknownGuardError,
-} from "./evaluator.js";
-export { normalizeTransition, normalizeTransitions, resolveTransitions } from "./resolver.js";
-export { createSnapshot, deepFreeze, freezeSnapshot } from "./snapshot.js";
