@@ -71,7 +71,9 @@ class SendCommand<Ctx, Evt extends { type: string }, States extends string>
   }
 
   toString(): string {
-    return `send(${JSON.stringify(this.event)})`;
+    // fc.stringify, not JSON.stringify: it never throws (BigInt, cycles,
+    // Map/Set), so a failing counterexample stays readable.
+    return `send(${fc.stringify(this.event)})`;
   }
 }
 

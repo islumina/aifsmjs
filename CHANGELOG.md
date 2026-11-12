@@ -2,6 +2,13 @@
 
 All notable changes to aifsmjs are summarized here.
 
+## [Unreleased]
+
+### Changes
+
+- Fixed: `aifsmjs/pbt`'s generated send commands format their event with `fc.stringify` instead of `JSON.stringify`, so an event payload holding a `BigInt` or a cycle no longer makes `toString()` throw and the counterexample (and the determinism-violation message) shows `send({...})` instead of `[object Object]`.
+- Fixed: `createMachine()` takes a `MachineConfig` (the parameter type of `defineMachine`) instead of a `MachineDef`, so a definition that omits `context` type-checks (it already defaulted to `{}` at runtime) instead of failing with TS2345; this only widens the accepted type.
+
 ## [0.6.0] - 2026-09-29
 
 ### Breaking

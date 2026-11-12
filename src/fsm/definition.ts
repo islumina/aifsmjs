@@ -209,7 +209,7 @@ export function initialSnapshot<Ctx, Evt extends { type: string }, States extend
  * documented in the ai*js ecosystem review.
  */
 export function createMachine<Ctx, Evt extends { type: string }, States extends string>(
-  def: MachineDef<Ctx, Evt, States>,
+  def: MachineConfig<Ctx, Evt, States>,
   impl: Implementations<Ctx, Evt>,
   opts?: RuntimeOptions<Ctx, Evt, States>,
 ): Runtime<Ctx, Evt, States> {

@@ -42,6 +42,8 @@ Current review state after the 2026-09-29 ai*js 0.6.0 pass.
 - 0.6.0: `after()` validates `ms`/`fn` and clamps delays above 2^31-1 ms (aifsmjs-17).
 - 0.6.0 family rules: listeners removed mid-dispatch are skipped; argument misuse at the definition/runtime boundary throws `InvalidDefinitionError`; `package.json` `exports` nest `types` under `import`/`require` with `.d.cts` types, checked by the recursive `verify-exports`.
 - 0.6.0 size: tsup's shared `__export` chunk (paid by every entry), the unreachable child parent-abort wiring and duplicated transition-pick/plain-object helpers were removed.
+- Unreleased: PBT `SendCommand.toString()` uses `fc.stringify`, so a `BigInt` or cyclic event payload no longer hides the counterexample behind `[object Object]` (2026-11 review F1).
+- Unreleased: `createMachine()` accepts `MachineConfig` like `defineMachine`, so omitting `context` type-checks (2026-11 review F2).
 
 ## Verification Baseline
 
