@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MachineConfig } from "../../src/fsm/index.js";
-import { InvalidActionResultError, defineMachine } from "../../src/fsm/index.js";
+import { defineMachine, InvalidActionResultError } from "../../src/fsm/index.js";
 import * as root from "../../src/index.js";
 import { properties } from "../../src/pbt/index.js";
 

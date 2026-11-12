@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { InvalidDefinitionError, defineMachine } from "../../src/fsm/definition.js";
-import { RuntimeDisposedError, createRuntime } from "../../src/fsm/runtime.js";
+import { defineMachine, InvalidDefinitionError } from "../../src/fsm/definition.js";
+import { createRuntime, RuntimeDisposedError } from "../../src/fsm/runtime.js";
 import type { Implementations, MiddlewareContext } from "../../src/fsm/types.js";
 import { assign } from "../../src/fsm/updater.js";
 import { type EffectLog, makeImpl, trafficLight } from "../fixtures/traffic-light.js";
@@ -1015,7 +1015,7 @@ describe("async effect rejection with no 'error' listener (aifsmjs-14)", () => {
     await flush();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toMatch(/^aifsmjs: unhandled async effect rejection/);
-    expect((warn.mock.calls[0]?.[1] as Error).message).toBe("async-boom");
+    expect((warn.mock.calls[0]?.[1] as Error | undefined)?.message).toBe("async-boom");
   });
 
   it("no warning once an 'error' listener exists; the listener gets the rejection", async () => {

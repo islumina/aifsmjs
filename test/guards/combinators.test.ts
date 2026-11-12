@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AsyncGuardError, UnknownGuardError, evalGuard } from "../../src/fsm/evaluator.js";
+import { AsyncGuardError, evalGuard, UnknownGuardError } from "../../src/fsm/evaluator.js";
 import type { Guard, Implementations } from "../../src/fsm/types.js";
 import { and, not, or, stateIn } from "../../src/guards/index.js";
 

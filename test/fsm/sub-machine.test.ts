@@ -1,7 +1,7 @@
 import * as fc from "fast-check";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { defineMachine } from "../../src/fsm/definition.js";
-import { SubMachineError, createRuntime } from "../../src/fsm/runtime.js";
+import { createRuntime, SubMachineError } from "../../src/fsm/runtime.js";
 import type { Implementations, MachineDef, Runtime } from "../../src/fsm/types.js";
 import {
   childImpl,
@@ -221,8 +221,7 @@ describe("Group C — Enter/exit lifecycle action ordering", () => {
 
   it("C4: subscribers see parent snapshot AFTER child init: subRuntime() available inside subscriber", () => {
     const rt = createRuntime(parentMachine, parentImpl);
-    let subRuntimeInsideSubscriber: Runtime<unknown, { type: string }, string> | undefined =
-      undefined;
+    let subRuntimeInsideSubscriber: Runtime<unknown, { type: string }, string> | undefined;
     rt.subscribe(() => {
       subRuntimeInsideSubscriber = rt.subRuntime();
     });
@@ -232,7 +231,7 @@ describe("Group C — Enter/exit lifecycle action ordering", () => {
   });
 
   it("C5: middleware sees next already committed, subRuntime() pointing to new child", () => {
-    let middlewareSubRuntime: Runtime<unknown, { type: string }, string> | undefined = undefined;
+    let middlewareSubRuntime: Runtime<unknown, { type: string }, string> | undefined;
     const rt = createRuntime(parentMachine, parentImpl, {
       middleware: [
         (_ctx, next) => {

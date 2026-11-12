@@ -1,4 +1,4 @@
-import { AsyncGuardError, UnknownGuardError, isThenable, ownValue } from "../fsm/evaluator.js";
+import { AsyncGuardError, isThenable, ownValue, UnknownGuardError } from "../fsm/evaluator.js";
 import type { Guard, GuardArgs, GuardRef } from "../fsm/types.js";
 
 function resolveItem<Ctx, Evt>(item: GuardRef<Ctx, Evt>, args: GuardArgs<Ctx, Evt>): boolean {

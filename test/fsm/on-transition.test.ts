@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createRuntime } from "../../src/fsm/runtime.js";
 import type { RuntimeTransitionEvent } from "../../src/fsm/types.js";
 import {
+  makeImpl,
   type Ctx as TLCtx,
   type Evt as TLEvt,
   type States as TLStates,
-  makeImpl,
   trafficLight,
 } from "../fixtures/traffic-light.js";
 

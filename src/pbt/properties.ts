@@ -8,9 +8,9 @@ import { createRuntime } from "../fsm/runtime.js";
 import type { Guard, Implementations, MachineDef } from "../fsm/types.js";
 import { replay } from "../replay/index.js";
 import {
+  commandsFromMachine,
   type EventArbitraries,
   type FsmModel,
-  commandsFromMachine,
   initialModel,
 } from "./commands.js";
 

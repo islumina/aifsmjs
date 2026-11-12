@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { defineMachine, initialSnapshot } from "../../src/fsm/definition.js";
 import { UnknownGuardError } from "../../src/fsm/evaluator.js";
-import { InvalidActionResultError, UnknownActionError, step } from "../../src/fsm/lifecycle.js";
+import { InvalidActionResultError, step, UnknownActionError } from "../../src/fsm/lifecycle.js";
 import { resolveTransitions } from "../../src/fsm/resolver.js";
 import { createRuntime } from "../../src/fsm/runtime.js";
 import type { Implementations } from "../../src/fsm/types.js";

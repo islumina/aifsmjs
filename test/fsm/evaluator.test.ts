@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   AsyncGuardError,
-  UnknownGuardError,
   evalGuard,
   isAsyncGuardFn,
   resolveGuard,
+  UnknownGuardError,
 } from "../../src/fsm/evaluator.js";
 import type { Guard, Implementations } from "../../src/fsm/types.js";
 
