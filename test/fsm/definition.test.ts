@@ -535,4 +535,15 @@ describe("createMachine() — single-factory convenience", () => {
       ),
     ).toThrow(/not declared/);
   });
+
+  it("accepts a context-less config like defineMachine and defaults context to {}", () => {
+    // Type-level regression: `pnpm typecheck` (tsconfig.test.json) fails with
+    // TS2345 if createMachine's parameter requires `context` again.
+    type C = Record<string, never>;
+    type E = { type: "GO" };
+    const def = defineMachine<C, E, "a">({ id: "m", initial: "a", states: { a: {} } });
+    expect(def.context).toEqual({});
+    const rt = createMachine<C, E, "a">({ id: "m", initial: "a", states: { a: {} } }, {});
+    expect(rt.getSnapshot().context).toEqual({});
+  });
 });
